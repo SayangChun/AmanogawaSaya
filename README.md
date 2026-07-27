@@ -59,3 +59,4 @@ python scripts/build_animations.py
 ## 声明
 
 本项目为个人向桌面陪伴原型，角色版权归属原作相关权利方。请勿用于商业传播。
+
