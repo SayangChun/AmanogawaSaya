@@ -13,8 +13,13 @@ const CLICK_SUPPRESS_MS = 500;
 let state = loadState();
 let currentLine = state.lastLine || "";
 let currentScene = state.lastScene || "boot";
-/** Stage focus: no bubble / dock / panel UI. */
+/**
+ * Stage focus: keep dock / panel chrome off.
+ * Speech bubble is shown — companion lines appear in the floating window.
+ */
 const UI_MINIMAL = true;
+/** When true, dialogue bubble is rendered even in minimal stage mode. */
+const SHOW_BUBBLE = true;
 let bubbleOpen = false;
 let bubbleHideTimer = null;
 /**
@@ -100,17 +105,15 @@ function ensureInteractiveMode() {
 }
 
 function openBubble(ms = 8000) {
-  if (UI_MINIMAL) {
+  if (!SHOW_BUBBLE) {
     bubbleOpen = false;
     return;
   }
   bubbleOpen = true;
   if (bubbleHideTimer) clearTimeout(bubbleHideTimer);
   bubbleHideTimer = setTimeout(() => {
-    if (state.mode === "compact") {
-      bubbleOpen = false;
-      updateBubbleDom();
-    }
+    bubbleOpen = false;
+    updateBubbleDom();
   }, ms);
 }
 
@@ -183,9 +186,19 @@ function starsHtml(count) {
 }
 
 function shellHtml() {
-  // Minimal stage: only Saya — no bubble, dock, panel, or status data.
+  // Minimal stage: Saya + speech bubble (no dock / panel chrome).
+  const rank = getAffinityRank(state.affinity);
+  const bubbleClass = bubbleOpen ? "bubble" : "bubble closed";
   return `
-    <div class="shell art-body shell-minimal">
+    <div class="shell art-body shell-minimal shell-with-bubble">
+      <div class="${bubbleClass}" id="bubble" role="status" aria-live="polite">
+        <div class="bubble-meta">
+          <span class="bubble-name">${CHARACTER.shortName}</span>
+          <span class="bubble-rank">${rank.title}</span>
+        </div>
+        <p class="bubble-text" id="line-text">${escapeHtml(currentLine || "……")}</p>
+      </div>
+
       <div class="stage" id="stage">
         <div class="stars" id="stars" aria-hidden="true"></div>
         <div class="stage-glow"></div>
@@ -328,16 +341,13 @@ function bind() {
       if (dragged) return;
       if (Date.now() < suppressClickUntil) return;
 
-      // Minimal stage: click does nothing (no menu / panel / bubble).
-      if (UI_MINIMAL) return;
-
-      // Pure click only — never expand window as a side-effect of a drag gesture.
-      if (state.mode === "compact") {
+      // Pure click: speak (time-of-day or tap). No dock/panel enlarge in minimal mode.
+      if (state.mode === "compact" && !UI_MINIMAL) {
         ensureInteractiveMode();
-        say("tap", { affinityGain: 1 });
-      } else {
-        say("tap", { affinityGain: 0 });
       }
+      // Prefer time-bucket lines so noon / afternoon greetings surface in the window.
+      const scene = Math.random() < 0.55 ? timeBucket() : "tap";
+      say(scene, { affinityGain: 1 });
     });
 
     pet.addEventListener("pointercancel", (event) => {
@@ -415,8 +425,8 @@ function boot() {
   currentScene = line.scene;
   currentLine = line.text;
   state.artStyle = "body";
-  // Minimal stage: keep state but do not surface dialogue / panels.
-  if (!UI_MINIMAL) openBubble(10000);
+  // Show companion line in the floating window on launch.
+  openBubble(10000);
   persist();
   paint();
   motion.playScene(currentScene);

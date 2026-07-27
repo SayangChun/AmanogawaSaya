@@ -25,9 +25,10 @@ let currentMode = "compact";
 /** When true, refuse setMode resizes (prevents drag → window grow) */
 let windowDragging = false;
 
-/** Window modes: compact full-body VPet / interactive dock / full panel */
+/** Window modes: compact full-body VPet + bubble / interactive dock / full panel */
 const WINDOW_MODES = {
-  compact: { width: 160, height: 230 },
+  // Taller compact: room for speech bubble above full-body sprite
+  compact: { width: 220, height: 320 },
   dock: { width: 300, height: 420 },
   panel: { width: 360, height: 560 },
 };

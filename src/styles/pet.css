@@ -341,11 +341,14 @@
   display: none;
 }
 
-/* Minimal stage: character only — no chrome / data UI */
-.shell-minimal .bubble,
+/* Minimal stage: no dock / panel chrome; bubble allowed via shell-with-bubble */
 .shell-minimal .dock,
 .shell-minimal .panel,
 .shell-minimal .compact-hint {
+  display: none !important;
+}
+
+.shell-minimal:not(.shell-with-bubble) .bubble {
   display: none !important;
 }
 
@@ -354,10 +357,42 @@
   justify-content: flex-end;
 }
 
-.shell-minimal .stage {
+.shell-minimal:not(.shell-with-bubble) .stage {
   min-height: 0;
   width: 100%;
   height: 100%;
+}
+
+/* Compact floating window: bubble above full-body sprite */
+.shell-with-bubble {
+  padding: 6px 8px 4px;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+.shell-with-bubble .bubble {
+  width: min(100%, 200px);
+  margin-bottom: 2px;
+  padding: 8px 10px 9px;
+  font-size: 0.82rem;
+  pointer-events: none;
+  -webkit-app-region: no-drag;
+}
+
+.shell-with-bubble .bubble-text {
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+.shell-with-bubble .stage {
+  min-height: 0;
+  flex: 1;
+  width: 100%;
+}
+
+.shell-with-bubble .pet-hit {
+  width: 128px;
+  height: 182px;
 }
 
 .dock-btn {

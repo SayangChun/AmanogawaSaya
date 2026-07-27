@@ -15,6 +15,11 @@ const LINES = {
     "新的一天。先慢慢来，不要一下子把自己燃尽。",
     "窗帘拉开一点吧。光也会帮你清醒。",
   ],
+  noon: [
+    "中午了。……要记得吃点东西。",
+    "太阳最高的时候，影子最短。……你也别把自己压得太紧。",
+    "午间可以歇一下。星空会等你的。",
+  ],
   afternoon: [
     "午后的光有点懒。……你也是吗？",
     "如果脑袋发沉，就停十秒。我在。",
@@ -73,7 +78,8 @@ function pick(list) {
 export function timeBucket(date = new Date()) {
   const h = date.getHours();
   if (h >= 5 && h < 11) return "morning";
-  if (h >= 11 && h < 17) return "afternoon";
+  if (h >= 11 && h < 14) return "noon";
+  if (h >= 14 && h < 17) return "afternoon";
   if (h >= 17 && h < 21) return "evening";
   if (h >= 21 && h < 24) return "night";
   return "lateNight";

@@ -69,6 +69,7 @@ const IDLE_POOL = [
 const SCENE_ACTION = {
   boot: "wave",
   morning: "soft",
+  noon: "calm",
   afternoon: "idle",
   evening: "coat",
   night: "sleep",
