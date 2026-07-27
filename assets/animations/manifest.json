@@ -11,9 +11,13 @@
         "./assets/animations/idle/00.png",
         "./assets/animations/idle/01.png",
         "./assets/animations/idle/02.png",
-        "./assets/animations/idle/03.png"
+        "./assets/animations/idle/03.png",
+        "./assets/animations/idle/04.png",
+        "./assets/animations/idle/05.png",
+        "./assets/animations/idle/06.png",
+        "./assets/animations/idle/07.png"
       ],
-      "fps": 3,
+      "fps": 5,
       "loop": true,
       "duration": null,
       "holdLast": false
@@ -23,11 +27,13 @@
         "./assets/animations/breathe/00.png",
         "./assets/animations/breathe/01.png",
         "./assets/animations/breathe/02.png",
-        "./assets/animations/breathe/03.png"
+        "./assets/animations/breathe/03.png",
+        "./assets/animations/breathe/04.png",
+        "./assets/animations/breathe/05.png"
       ],
-      "fps": 2.5,
+      "fps": 4,
       "loop": true,
-      "duration": 3600,
+      "duration": 4500,
       "holdLast": false
     },
     "sway": {
