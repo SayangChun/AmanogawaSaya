@@ -182,15 +182,15 @@ def patch_manifest(idle_paths: list[str], breathe_paths: list[str]) -> None:
     data = json.loads(man_path.read_text(encoding="utf-8"))
     data["actions"]["idle"] = {
         "frames": idle_paths,
-        # 8 frames @ 5fps ≈ 1.6s/cycle — calm, readable breathing
-        "fps": 5,
+        # 8 frames @ 2.5fps ≈ 3.2s/cycle — calm, natural breathing
+        "fps": 2.5,
         "loop": True,
         "duration": None,
         "holdLast": False,
     }
     data["actions"]["breathe"] = {
         "frames": breathe_paths,
-        "fps": 4,
+        "fps": 2,
         "loop": True,
         "duration": 4500,
         "holdLast": False,
