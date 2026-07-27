@@ -20,7 +20,7 @@ SESSION = Path(
 )
 OUT = ROOT / "assets" / "animations"
 BASE = OUT / "_base.png"
-REF = ROOT / "沙夜原型参考"
+REF = ROOT / "原型参考"
 SOFT = REF / "saya-uniform-soft.png"
 SMILE = REF / "saya-uniform-smile.png"
 WORRIED = REF / "saya-uniform-worried.png"
@@ -101,68 +101,90 @@ def fit_canvas(im: Image.Image, size: tuple[int, int] = CANVAS) -> Image.Image:
 def strip_pink_stroke(im: Image.Image) -> Image.Image:
     """Remove VN hot-pink cutout stroke everywhere it appears.
 
-    The stroke color is unique enough (magenta-pink, not red bow / brown shoes)
-    that a global chroma+distance kill is safer than flood-fill (dark AA rings
-    often isolate stroke islands from the exterior).
+    Must NOT eat dark tights / soft shadows / brown loafers. Earlier builds used
+    dark magenta palette anchors (dist<=70) that matched black-tights AA and
+    shoe leather, punching stocking-like holes in the legs.
     """
     import numpy as np
 
     arr = np.array(im.convert("RGBA"), dtype=np.uint8)
     rgb = arr[:, :, :3].astype(np.float32)
     a = arr[:, :, 3]
+    # Hot-pink stroke only — no dark anchors that collide with tights/shoes.
     variants = np.array(
         [
             [215, 96, 141],
             [255, 120, 170],
             [230, 90, 150],
             [200, 80, 130],
-            [180, 70, 120],
-            [160, 60, 110],
-            [140, 55, 100],
             [255, 105, 180],
             [240, 100, 160],
-            [190, 70, 125],
-            [170, 55, 105],
             [231, 99, 148],
             [225, 87, 147],
             [218, 95, 141],
+            [235, 110, 155],
+            [210, 85, 140],
         ],
         dtype=np.float32,
     )
     diff = rgb[:, :, None, :] - variants[None, None, :, :]
     dist = np.sqrt((diff * diff).sum(axis=-1)).min(axis=-1)
     r, g, b = rgb[:, :, 0], rgb[:, :, 1], rgb[:, :, 2]
+    mx = np.maximum(np.maximum(r, g), b)
 
-    # Magenta-pink stroke: strong R, elevated B vs G (not pure red bow / brown)
-    magenta = (
-        (r >= 130)
-        & (g <= 175)
-        & (b >= 90)
-        & ((r - g) >= 30)
-        & ((r - b) >= 10)
-        & (b >= g - 5)  # blue channel stays with red → magenta, not brown
-        & ((b - g) >= -5)
+    # Protect black tights / dark clothing / hair shadows
+    protect_dark = mx <= 115
+
+    # Protect brown loafers (warm, R-dominant, not magenta)
+    protect_shoe = (
+        (r >= 70)
+        & (r <= 210)
+        & (g >= 35)
+        & (g <= 160)
+        & (b <= 120)
+        & ((r - b) >= 12)
+        & (g >= b - 15)
+        & ((r - g) <= 90)  # not neon pink
     )
-    # Distance to known stroke palette
-    near = dist <= 70
-    stroke = (a > 0) & (near | (magenta & (dist <= 110)) | (magenta & (r >= 170)))
 
-    # Soft AA: semi-transparent magenta fringe
+    protect = protect_dark | protect_shoe
+
+    # Magenta-pink stroke: bright R, elevated B vs G (not pure red bow / brown)
+    magenta = (
+        (r >= 160)
+        & (g <= 170)
+        & (b >= 100)
+        & ((r - g) >= 40)
+        & ((r - b) >= 15)
+        & (b >= g - 5)
+        & ((b - g) >= 5)
+    )
+    # Distance to hot-pink palette (tighter than before)
+    near = dist <= 48
+    stroke = (a > 0) & (~protect) & (
+        (near & (r >= 150))
+        | (magenta & (dist <= 75))
+        | (magenta & (r >= 190) & (dist <= 95))
+    )
+
+    # Soft AA: semi-transparent magenta fringe only
     soft = (
         (a > 0)
         & (a < 250)
-        & (r >= 120)
-        & (g <= 190)
-        & (b >= 85)
-        & ((r - g) >= 20)
-        & (b >= g - 8)
-        & (dist <= 100)
+        & (~protect)
+        & (r >= 150)
+        & (g <= 180)
+        & (b >= 100)
+        & ((r - g) >= 30)
+        & (b >= g - 5)
+        & (dist <= 70)
     )
 
     remove = stroke | soft
     arr[remove] = 0
 
     # One dilate of removed area into remaining near-stroke pixels (AA clean)
+    # Keep protect mask so tights/shoes never get fringe-eaten.
     pad = np.pad(remove, 1, constant_values=False)
     border = (
         pad[0:-2, 1:-1]
@@ -170,7 +192,15 @@ def strip_pink_stroke(im: Image.Image) -> Image.Image:
         | pad[1:-1, 0:-2]
         | pad[1:-1, 2:]
     ) & (~remove)
-    near2 = border & (dist <= 85) & (r > g + 15) & (b >= g - 10) & (a > 0)
+    near2 = (
+        border
+        & (~protect)
+        & (dist <= 55)
+        & (r >= 150)
+        & (r > g + 25)
+        & (b >= g - 5)
+        & (a > 0)
+    )
     arr[near2] = 0
 
     arr[arr[:, :, 3] <= 10] = 0
