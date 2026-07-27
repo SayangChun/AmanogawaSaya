@@ -1,0 +1,15 @@
+{
+  "name": "amanogawa-saya-desktop-pet",
+  "private": true,
+  "version": "0.4.0",
+  "description": "天之川沙夜 · 桌面陪伴（VPet 帧动画全身桌宠）",
+  "type": "module",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron ."
+  },
+  "dependencies": {
+    "electron": "^43.1.0"
+  }
+}

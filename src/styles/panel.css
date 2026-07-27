@@ -1,0 +1,247 @@
+/* ===== Full control panel ===== */
+.panel {
+  width: 100%;
+  margin-top: 8px;
+  padding: 12px 12px 14px;
+  border-radius: var(--radius);
+  background: var(--panel-solid);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(16px);
+  max-height: min(280px, 48vh);
+  overflow: auto;
+  z-index: 6;
+  animation: bubble-in 0.24s ease;
+}
+
+.panel::-webkit-scrollbar {
+  width: 6px;
+}
+
+.panel::-webkit-scrollbar-thumb {
+  background: rgba(160, 190, 255, 0.22);
+  border-radius: 999px;
+}
+
+.panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+  -webkit-app-region: drag;
+}
+
+.panel-header h2 {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.panel-sub {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.panel-actions {
+  display: flex;
+  gap: 6px;
+  -webkit-app-region: no-drag;
+}
+
+.icon-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  display: grid;
+  place-items: center;
+  font-size: 0.9rem;
+}
+
+.icon-btn:hover {
+  background: var(--accent-soft);
+}
+
+/* affinity */
+.affinity-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(94, 200, 232, 0.08), rgba(155, 189, 255, 0.06));
+  border: 1px solid var(--line);
+  margin-bottom: 12px;
+}
+
+.affinity-card .label {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.affinity-card .title {
+  font-size: 0.9rem;
+  margin-top: 2px;
+}
+
+.affinity-value {
+  font-family: var(--serif);
+  font-size: 1.35rem;
+  color: var(--accent);
+}
+
+.affinity-bar {
+  grid-column: 1 / -1;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.affinity-bar > i {
+  display: block;
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--ribbon), var(--accent), var(--gold));
+  transition: width 0.35s ease;
+}
+
+.stars-row {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 4px;
+  color: var(--gold);
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+}
+
+/* sections */
+.section {
+  margin-bottom: 12px;
+}
+
+.section:last-child {
+  margin-bottom: 0;
+}
+
+.section-title {
+  margin: 0 0 8px;
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.btn {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font-size: 0.82rem;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.btn:hover {
+  background: var(--accent-soft);
+  border-color: var(--line-strong);
+}
+
+.btn.primary {
+  background: linear-gradient(135deg, rgba(155, 189, 255, 0.92), rgba(180, 210, 255, 0.7));
+  color: #0a1220;
+  border-color: transparent;
+  font-weight: 600;
+}
+
+.btn.ghost {
+  background: transparent;
+}
+
+.btn.danger {
+  color: var(--danger);
+  border-color: rgba(255, 143, 160, 0.3);
+}
+
+.field {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 4px;
+  border-bottom: 1px solid rgba(160, 190, 255, 0.08);
+  font-size: 0.82rem;
+}
+
+.field:last-child {
+  border-bottom: none;
+}
+
+.field label {
+  color: var(--muted);
+}
+
+.field input[type="number"] {
+  width: 64px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.25);
+  text-align: center;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.field input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--ribbon);
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.stat-pill {
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line);
+}
+
+.stat-pill span {
+  display: block;
+  font-size: 0.68rem;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.stat-pill strong {
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.footer-note {
+  margin: 10px 0 0;
+  font-size: 0.68rem;
+  color: rgba(154, 168, 196, 0.75);
+  line-height: 1.5;
+  text-align: center;
+}
