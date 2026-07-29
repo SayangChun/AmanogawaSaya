@@ -56,7 +56,8 @@ const wander = createWanderController({
   moveBy: (delta) => window.petApi?.moveBy?.(delta),
   getBounds: () => window.petApi?.bounds?.() ?? Promise.resolve(null),
   getWorkArea: () => window.petApi?.workArea?.() ?? Promise.resolve(null),
-  isBlocked: () => isPointerBlocked(),
+  // Only real drag sessions block locomotion — not post-drag click suppress.
+  isBlocked: () => isDragging || pointerArmed,
   onRoamStart: (_kind) => {
     if (Math.random() < 0.15 && !bubbleOpen) {
       const line = speak(timeBucket(), { affinity: state.affinity });
@@ -217,16 +218,43 @@ function spawnParticles(x, y, symbol = "✨") {
 }
 
 // ---------- menu helper ----------
-function toggleMenu(show, x, y) {
+/** Place the context menu fully inside the window; flip above cursor when near the bottom. */
+function placeMenuInViewport(menu, clientX, clientY) {
+  const pad = 6;
+  const mw = menu.offsetWidth;
+  const mh = menu.offsetHeight;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
+  let left = clientX;
+  let top = clientY;
+
+  // Prefer opening to the right of the cursor; shift left if it would clip.
+  if (left + mw > vw - pad) left = clientX - mw;
+  left = Math.max(pad, Math.min(left, Math.max(pad, vw - mw - pad)));
+
+  // Prefer opening below the cursor; flip above when not enough space under.
+  if (top + mh > vh - pad) top = clientY - mh;
+  top = Math.max(pad, Math.min(top, Math.max(pad, vh - mh - pad)));
+
+  menu.style.left = `${Math.round(left)}px`;
+  menu.style.top = `${Math.round(top)}px`;
+}
+
+function toggleMenu(show, clientX, clientY) {
   const menu = document.querySelector("#pet-menu");
   if (!menu) return;
   menuOpen = Boolean(show);
   if (menuOpen) {
-    if (x != null && y != null) {
-      menu.style.left = `${Math.min(x, 70)}px`;
-      menu.style.top = `${Math.max(10, Math.min(y, 80))}px`;
-    }
     menu.classList.remove("closed");
+    if (clientX != null && clientY != null) {
+      // First paint at the click so layout can measure real size, then clamp.
+      menu.style.left = `${Math.round(clientX)}px`;
+      menu.style.top = `${Math.round(clientY)}px`;
+      // Force layout after un-hiding (display:none → block).
+      void menu.offsetWidth;
+      placeMenuInViewport(menu, clientX, clientY);
+    }
   } else {
     menu.classList.add("closed");
   }
@@ -248,16 +276,34 @@ async function handleMenuAction(action) {
       say("praise", { affinityGain: 2 });
       spawnParticles(70, 90, "💖");
       break;
-    case "walk":
-      say("talk", { affinityGain: 1 });
+    case "walk": {
+      // User-initiated: force walk even if auto-roam is off or she was sleeping.
+      const before = state.affinity;
+      state = gainAffinity(state, 1);
+      delete state._affinityGained;
+      currentScene = "talk";
       currentLine = "要在桌面上走走吗？好的~";
       openBubble(4000);
-      await wander.planWalk();
+      updateBubbleDom();
+      if (state.affinity > before && state.affinity % 20 === 0) {
+        const extra = speak("affinityUp", { affinity: state.affinity });
+        currentLine = `${currentLine}\n${extra.text}`;
+        updateBubbleDom();
+      }
+      persist();
+      const ok = await wander.planWalk({ force: true });
+      if (!ok) {
+        currentLine = "等我一下，现在好像走不开…再试一次好吗？";
+        openBubble(3500);
+        updateBubbleDom();
+      }
       break;
-    case "hop":
-      wander.planHop();
-      spawnParticles(70, 90, "✨");
+    }
+    case "hop": {
+      const ok = wander.planHop({ force: true });
+      if (ok) spawnParticles(70, 90, "✨");
       break;
+    }
     case "sit":
       motion.lockFor(6000);
       say("talk", { affinityGain: 1 });
@@ -297,6 +343,7 @@ function starsHtml(count) {
 function shellHtml() {
   const rank = getAffinityRank(state.affinity);
   const bubbleClass = bubbleOpen ? "bubble" : "bubble closed";
+  // Menu lives outside .shell so overflow:hidden on the shell cannot clip it.
   return `
     <div class="shell art-body shell-minimal shell-with-bubble">
       <div class="${bubbleClass}" id="bubble" role="status" aria-live="polite" title="点击与沙夜对话">
@@ -311,19 +358,6 @@ function shellHtml() {
         <div class="stars" id="stars" aria-hidden="true"></div>
         <div class="stage-glow"></div>
 
-        <div class="pet-menu closed" id="pet-menu" role="menu">
-          <button class="pet-menu-item" data-menu-action="talk" type="button">💬 聊聊天</button>
-          <button class="pet-menu-item" data-menu-action="praise" type="button">✨ 夸夸沙夜</button>
-          <button class="pet-menu-item" data-menu-action="walk" type="button">🚶 散步走走</button>
-          <button class="pet-menu-item" data-menu-action="hop" type="button">🦘 开心小跳</button>
-          <button class="pet-menu-item" data-menu-action="sit" type="button">🪑 坐下休息</button>
-          <button class="pet-menu-item" data-menu-action="toggle-wander" id="menu-wander-toggle" type="button">
-            ${autoWanderEnabled ? "🌐 漫游：开启" : "🌐 漫游：关闭"}
-          </button>
-          <div class="pet-menu-divider"></div>
-          <button class="pet-menu-item danger" data-menu-action="hide" type="button">📌 隐藏到托盘</button>
-        </div>
-
         <button class="pet-hit" id="pet-hit" type="button" aria-label="拖动天之川沙夜">
           <div class="pet-actor act-idle" id="pet-actor" data-action="idle">
             <div class="pet-shadow" aria-hidden="true"></div>
@@ -334,6 +368,19 @@ function shellHtml() {
           </div>
         </button>
       </div>
+    </div>
+
+    <div class="pet-menu closed" id="pet-menu" role="menu">
+      <button class="pet-menu-item" data-menu-action="talk" type="button">💬 聊聊天</button>
+      <button class="pet-menu-item" data-menu-action="praise" type="button">✨ 夸夸沙夜</button>
+      <button class="pet-menu-item" data-menu-action="walk" type="button">🚶 散步走走</button>
+      <button class="pet-menu-item" data-menu-action="hop" type="button">🦘 开心小跳</button>
+      <button class="pet-menu-item" data-menu-action="sit" type="button">🪑 坐下休息</button>
+      <button class="pet-menu-item" data-menu-action="toggle-wander" id="menu-wander-toggle" type="button">
+        ${autoWanderEnabled ? "🌐 漫游：开启" : "🌐 漫游：关闭"}
+      </button>
+      <div class="pet-menu-divider"></div>
+      <button class="pet-menu-item danger" data-menu-action="hide" type="button">📌 隐藏到托盘</button>
     </div>
   `;
 }
@@ -511,10 +558,8 @@ function bind() {
       event.preventDefault();
       event.stopPropagation();
       if (isDragging) return;
-      const rect = pet.getBoundingClientRect();
-      const x = event.clientX - rect.left;
-      const y = event.clientY - rect.top;
-      toggleMenu(true, x, y);
+      // Use viewport coords so fixed menu can clamp to the floating window.
+      toggleMenu(true, event.clientX, event.clientY);
     });
 
     pet.addEventListener("dblclick", (event) => {

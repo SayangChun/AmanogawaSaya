@@ -151,13 +151,17 @@
   justify-content: center;
 }
 
-/* Facing — flip whole actor so body keyframes still compose correctly */
+/*
+ * Facing — flip whole actor so body keyframes still compose correctly.
+ * Walk/idle sprites are authored facing LEFT (lead foot toward screen-left).
+ * Only flip when she should face right.
+ */
 .pet-actor.facing-left {
-  transform: scaleX(-1);
+  transform: scaleX(1);
 }
 
 .pet-actor.facing-right {
-  transform: scaleX(1);
+  transform: scaleX(-1);
 }
 
 .pet-shadow {
@@ -627,10 +631,14 @@
 }
 
 /* ===== Right-Click Context Menu ===== */
+/* fixed + outside .shell so overflow:hidden never clips the menu */
 .pet-menu {
-  position: absolute;
-  z-index: 100;
+  position: fixed;
+  z-index: 200;
   min-width: 125px;
+  max-height: calc(100vh - 12px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--panel, rgba(20, 24, 38, 0.92));
   border: 1px solid var(--line, rgba(140, 170, 220, 0.25));
   border-radius: 12px;
@@ -641,6 +649,7 @@
   flex-direction: column;
   gap: 2px;
   animation: menu-pop 0.18s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+  transform-origin: top left;
 }
 
 .pet-menu.closed {

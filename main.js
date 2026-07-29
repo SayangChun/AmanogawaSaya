@@ -88,17 +88,49 @@ function loadPersistedBounds() {
   }
 }
 
-function savePersistedBounds(bounds) {
-  try {
-    let existing = {};
-    if (fs.existsSync(STATE_PATH)) {
-      existing = JSON.parse(fs.readFileSync(STATE_PATH, "utf8"));
+/** @type {ReturnType<typeof setTimeout> | null} */
+let persistBoundsTimer = null;
+/** @type {{ x: number, y: number, width: number, height: number } | null} */
+let pendingPersistBounds = null;
+
+function savePersistedBounds(bounds, { immediate = false } = {}) {
+  if (!bounds) return;
+  pendingPersistBounds = {
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+  };
+
+  const flush = () => {
+    persistBoundsTimer = null;
+    const toSave = pendingPersistBounds;
+    pendingPersistBounds = null;
+    if (!toSave) return;
+    try {
+      let existing = {};
+      if (fs.existsSync(STATE_PATH)) {
+        existing = JSON.parse(fs.readFileSync(STATE_PATH, "utf8"));
+      }
+      existing.bounds = toSave;
+      fs.writeFileSync(STATE_PATH, JSON.stringify(existing, null, 2), "utf8");
+    } catch {
+      // ignore persistence errors
     }
-    existing.bounds = bounds;
-    fs.writeFileSync(STATE_PATH, JSON.stringify(existing, null, 2), "utf8");
-  } catch {
-    // ignore persistence errors
+  };
+
+  if (immediate) {
+    if (persistBoundsTimer) {
+      clearTimeout(persistBoundsTimer);
+      persistBoundsTimer = null;
+    }
+    flush();
+    return;
   }
+
+  // Walk/hop moves every frame — debounce disk writes so locomotion stays smooth.
+  if (persistBoundsTimer) return;
+  persistBoundsTimer = setTimeout(flush, 400);
 }
 
 function defaultPosition(size) {
@@ -180,7 +212,7 @@ function setMode(mode, { animate = false, force = false } = {}) {
     height: next.height,
   };
   mainWindow.setBounds(bounds, animate);
-  savePersistedBounds(bounds);
+  savePersistedBounds(bounds, { immediate: true });
   return { mode, ...bounds };
 }
 
@@ -188,20 +220,25 @@ function setMode(mode, { animate = false, force = false } = {}) {
 function moveWindowBy(dx, dy) {
   if (!mainWindow) return null;
   if (!Number.isFinite(dx) || !Number.isFinite(dy)) return null;
+  if (dx === 0 && dy === 0) return null;
 
   const size = modeSize();
   const { x, y } = mainWindow.getBounds();
-  if (dx === 0 && dy === 0) {
+  // Prefer whole-pixel steps from the renderer (wander accumulates sub-pixels).
+  // Math.round still accepts drag deltas that land on a new integer cell.
+  const targetX = Math.round(x + dx);
+  const targetY = Math.round(y + dy);
+  if (targetX === x && targetY === y) {
     return { x, y, width: size.width, height: size.height };
   }
 
-  const next = clampToWorkArea(
-    Math.round(x + dx),
-    Math.round(y + dy),
-    size.width,
-    size.height,
-  );
+  const next = clampToWorkArea(targetX, targetY, size.width, size.height);
   if (!Number.isFinite(next.x) || !Number.isFinite(next.y)) return null;
+
+  // No-op if clamp (edge of work area) cancelled the move.
+  if (next.x === x && next.y === y) {
+    return { x, y, width: size.width, height: size.height };
+  }
 
   // setBounds with fixed size — setPosition alone can drift size on some DPI paths
   const bounds = {
@@ -224,7 +261,7 @@ function setWindowDragging(dragging) {
     if (b.width !== size.width || b.height !== size.height) {
       const bounds = { x: b.x, y: b.y, width: size.width, height: size.height };
       mainWindow.setBounds(bounds, false);
-      savePersistedBounds(bounds);
+      savePersistedBounds(bounds, { immediate: true });
     }
   }
   return windowDragging;
@@ -357,7 +394,7 @@ app.whenReady().then(() => {
 
     const bounds = { x: next.x, y: next.y, width: size.width, height: size.height };
     mainWindow.setBounds(bounds, false);
-    savePersistedBounds(bounds);
+    savePersistedBounds(bounds, { immediate: true });
     return bounds;
   });
 

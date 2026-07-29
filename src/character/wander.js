@@ -4,9 +4,9 @@
  */
 
 /** px per second while walking (screen space) */
-const WALK_SPEED = 48;
+const WALK_SPEED = 72;
 /** px per second while hopping forward (screen space) */
-const HOP_FORWARD_SPEED = 58;
+const HOP_FORWARD_SPEED = 90;
 /** roam planner cadence */
 const ROAM_MIN_MS = 9000;
 const ROAM_MAX_MS = 20000;
@@ -58,6 +58,13 @@ export function createWanderController(deps) {
   let lastTick = 0;
   /** @type {null | { vx: number, until: number, kind: string }} */
   let locomotion = null;
+  /**
+   * Sub-pixel remainder for screen movement.
+   * Window bounds are integers; without accumulation, high-refresh displays
+   * (dx ≈ 0.3–0.5 px/frame) round every step back to zero and never move.
+   */
+  let moveCarryX = 0;
+  let moveCarryY = 0;
 
   function clearRoamTimer() {
     if (roamTimer) {
@@ -76,17 +83,49 @@ export function createWanderController(deps) {
 
   function stopLocomotion() {
     locomotion = null;
+    moveCarryX = 0;
+    moveCarryY = 0;
     stopRaf();
   }
 
-  function blocked() {
-    if (!enabled) return true;
+  /**
+   * Apply velocity over dt, flushing only whole pixels so the OS window moves.
+   * @param {number} dt seconds
+   */
+  function applyMove(dt) {
+    if (!locomotion || dt <= 0) return;
+    moveCarryX += locomotion.vx * dt;
+    moveCarryY += 0;
+
+    const dx = moveCarryX >= 0 ? Math.floor(moveCarryX) : Math.ceil(moveCarryX);
+    const dy = moveCarryY >= 0 ? Math.floor(moveCarryY) : Math.ceil(moveCarryY);
+    if (dx === 0 && dy === 0) return;
+
+    moveCarryX -= dx;
+    moveCarryY -= dy;
+    moveBy({ dx, dy });
+  }
+
+  /**
+   * Hard blocks: user is dragging / motion paused — window must not auto-move.
+   * Does NOT include auto-wander off or sleep (user menu can interrupt those).
+   */
+  function isHardBlocked() {
     if (typeof isBlocked === "function" && isBlocked()) return true;
     if (motion.isPaused?.()) return true;
     if (motion.isEnabled && !motion.isEnabled()) return true;
     const act = motion.getAction?.();
-    if (act === "drag" || act === "sleep") return true;
+    if (act === "drag") return true;
     return false;
+  }
+
+  /** Soft gate for the auto-roam planner only. */
+  function canAutoRoam() {
+    if (!enabled) return false;
+    if (isHardBlocked()) return false;
+    const act = motion.getAction?.();
+    if (act === "sleep") return false;
+    return true;
   }
 
   /**
@@ -97,7 +136,8 @@ export function createWanderController(deps) {
     rafId = null;
     if (!locomotion) return;
 
-    if (blocked() || Date.now() >= locomotion.until) {
+    // Only hard-block stops an in-progress walk (not "auto wander off").
+    if (isHardBlocked() || Date.now() >= locomotion.until) {
       stopLocomotion();
       return;
     }
@@ -113,12 +153,7 @@ export function createWanderController(deps) {
     const dt = Math.min(0.05, Math.max(0, (now - lastTick) / 1000));
     lastTick = now;
 
-    const dx = locomotion.vx * dt;
-    const dy = 0;
-
-    if (dx !== 0 || dy !== 0) {
-      moveBy({ dx, dy });
-    }
+    applyMove(dt);
 
     rafId = requestAnimationFrame(tick);
   }
@@ -131,12 +166,11 @@ export function createWanderController(deps) {
 
   /**
    * Called from motion actionChange when walk / hop starts.
+   * Always drives locomotion when a walk/hop clip plays — independent of auto-roam.
    * @param {string} actionId
    * @param {{ holdMs?: number|null }} [meta]
    */
   function onAction(actionId, meta = {}) {
-    if (!enabled) return;
-
     if (actionId === "walk") {
       // Re-use existing velocity if planner already set it; else invent a path.
       if (!locomotion || locomotion.kind !== "walk") {
@@ -189,14 +223,13 @@ export function createWanderController(deps) {
   }
 
   /**
-   * Plan a destination-ish walk toward a random point in the work area.
+   * Pick walk direction / duration from desktop free space.
+   * @param {number} preferredDir
+   * @param {number} duration
    */
-  async function planWalk() {
-    if (blocked()) return false;
-
-    const facing = motion.getFacing?.();
-    let dir = facing === "left" ? -1 : 1;
-    let duration = WALK_MS_MIN + Math.random() * (WALK_MS_MAX - WALK_MS_MIN);
+  async function resolveWalkPlan(preferredDir, duration) {
+    let dir = preferredDir;
+    let ms = duration;
 
     try {
       if (getBounds && getWorkArea) {
@@ -209,30 +242,80 @@ export function createWanderController(deps) {
             0,
             area.x + area.width - (bounds.x + bounds.width) - EDGE_MARGIN_PX,
           );
-          if (leftRoom < EDGE_MARGIN_PX && rightRoom > leftRoom) dir = 1;
-          else if (rightRoom < EDGE_MARGIN_PX && leftRoom > rightRoom) dir = -1;
 
-          // Cap duration so the planned step ends before the window hits clamp.
+          // Prefer the side with more room when cramped; otherwise keep facing.
+          if (leftRoom < 40 && rightRoom > leftRoom) dir = 1;
+          else if (rightRoom < 40 && leftRoom > rightRoom) dir = -1;
+          else if (leftRoom < 8 && rightRoom < 8) {
+            // Fully pinched — still walk in place briefly so the clip is visible.
+            dir = preferredDir || 1;
+          }
+
           const room = dir < 0 ? leftRoom : rightRoom;
-          const maxMs = Math.max(700, Math.min(WALK_MS_MAX, (room / WALK_SPEED) * 1000));
-          duration = Math.min(duration, maxMs);
+          if (room > 8) {
+            const maxMs = Math.max(900, Math.min(WALK_MS_MAX, (room / WALK_SPEED) * 1000));
+            ms = Math.min(ms, maxMs);
+          } else {
+            // Almost no room that way: flip and use the other side if possible.
+            const altDir = -dir;
+            const altRoom = altDir < 0 ? leftRoom : rightRoom;
+            if (altRoom > room) {
+              dir = altDir;
+              const maxMs = Math.max(900, Math.min(WALK_MS_MAX, (altRoom / WALK_SPEED) * 1000));
+              ms = Math.min(ms, maxMs);
+            } else {
+              ms = Math.min(ms, 1200);
+            }
+          }
         }
       }
     } catch {
       // offline / no petApi — keep random dir
     }
 
+    return { dir, duration: ms };
+  }
+
+  /**
+   * Plan a destination-ish walk toward a random point in the work area.
+   * @param {{ force?: boolean }} [opts] force=true: user menu — ignore auto-roam/sleep gates
+   */
+  async function planWalk(opts = {}) {
+    const force = Boolean(opts.force);
+    if (force) {
+      if (isHardBlocked()) return false;
+    } else if (!canAutoRoam()) {
+      return false;
+    }
+
+    const facing = motion.getFacing?.();
+    const preferredDir = facing === "left" ? -1 : 1;
+    let duration = WALK_MS_MIN + Math.random() * (WALK_MS_MAX - WALK_MS_MIN);
+
+    const plan = await resolveWalkPlan(preferredDir, duration);
+    // Re-check after await: user may have started a drag.
+    if (force ? isHardBlocked() : !canAutoRoam()) return false;
+
+    const dir = plan.dir;
+    duration = plan.duration;
+
+    // dir < 0 → move left + face left; dir > 0 → move right + face right
     motion.setFacing(dir);
+    // Clear sleep / sit context so fallback after walk is idle, not sleep.
+    motion.setContext?.("");
     const walkVx = dir * WALK_SPEED * (0.85 + Math.random() * 0.3);
+    const holdMs = Math.max(900, Math.round(duration));
 
     locomotion = {
       kind: "walk",
       vx: walkVx,
-      until: Date.now() + duration + 80,
+      until: Date.now() + holdMs + 80,
     };
+    moveCarryX = 0;
+    moveCarryY = 0;
 
-    motion.lockFor?.(duration);
-    motion.play("walk", { force: true, holdMs: Math.round(duration) });
+    motion.lockFor?.(holdMs);
+    motion.play("walk", { force: true, holdMs });
     startRaf();
     try {
       onRoamStart?.("walk");
@@ -242,11 +325,21 @@ export function createWanderController(deps) {
     return true;
   }
 
-  function planHop() {
-    if (blocked()) return false;
+  /**
+   * @param {{ force?: boolean }} [opts]
+   */
+  function planHop(opts = {}) {
+    const force = Boolean(opts.force);
+    if (force) {
+      if (isHardBlocked()) return false;
+    } else if (!canAutoRoam()) {
+      return false;
+    }
+
     const facing = motion.getFacing?.();
     const dir = facing === "left" ? -1 : 1;
     motion.setFacing(dir);
+    motion.setContext?.("");
     const now = Date.now();
     const vx = dir * HOP_FORWARD_SPEED;
     locomotion = {
@@ -254,6 +347,8 @@ export function createWanderController(deps) {
       vx,
       until: now + 1200,
     };
+    moveCarryX = 0;
+    moveCarryY = 0;
     motion.lockFor?.(1200);
     motion.play("hop", { force: true, holdMs: 1100 });
     startRaf();
@@ -278,7 +373,7 @@ export function createWanderController(deps) {
     roamTimer = null;
     if (!enabled) return;
 
-    if (!blocked() && Math.random() < ROAM_CHANCE) {
+    if (canAutoRoam() && Math.random() < ROAM_CHANCE) {
       const act = motion.getAction?.();
       // Don't interrupt talk / celebrate / sit mid-clip — only roam from calm states.
       if (
@@ -291,9 +386,9 @@ export function createWanderController(deps) {
         act === "smile"
       ) {
         if (Math.random() < WALK_VS_HOP) {
-          await planWalk();
+          await planWalk({ force: false });
         } else {
-          planHop();
+          planHop({ force: false });
         }
       }
     }

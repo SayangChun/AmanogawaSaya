@@ -109,8 +109,12 @@ export function createMotionController() {
   let actor = null;
 
   let currentAction = "idle";
-  /** @type {"left" | "right"} */
-  let facing = "right";
+  /**
+   * Screen facing. Sprites are drawn facing left by default;
+   * CSS flips only when facing === "right".
+   * @type {"left" | "right"}
+   */
+  let facing = "left";
   let frontIsA = true;
   let actionTimer = null;
   let idleTimer = null;
@@ -360,6 +364,9 @@ export function createMotionController() {
     onArtChange("body");
 
     clearActionTimer();
+    // Always drop a pending idle-pool tick; re-schedule below when appropriate.
+    // Otherwise a stale timer can cancel walk/hop mid-locomotion.
+    clearIdleTimer();
     const hold = opts.holdMs ?? def.duration;
     // Timed actions (including looping clips like walk): hold then fall back to idle/sleep.
     if (hold && hold > 0) {
