@@ -39,31 +39,44 @@ function modeSize(mode = currentMode) {
 
 const STATE_PATH = path.join(app.getPath("userData"), "saya-pet-state.json");
 
-const trayIcon = nativeImage.createFromDataURL(
-  "data:image/svg+xml;charset=UTF-8," +
-    encodeURIComponent(`
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-        <defs>
-          <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stop-color="#e8f0ff"/>
-            <stop offset="55%" stop-color="#8eb0e8"/>
-            <stop offset="100%" stop-color="#4a6fa5"/>
-          </linearGradient>
-          <linearGradient id="r" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stop-color="#5ec8e8"/>
-            <stop offset="100%" stop-color="#3aa8d0"/>
-          </linearGradient>
-        </defs>
-        <rect width="64" height="64" rx="18" fill="#0b1220"/>
-        <circle cx="32" cy="28" r="14" fill="url(#g)"/>
-        <ellipse cx="24" cy="27" rx="2.2" ry="2.8" fill="#c9a227"/>
-        <ellipse cx="40" cy="27" rx="2.2" ry="2.8" fill="#4a9fd4"/>
-        <path d="M26 35c2.5 2.2 9.5 2.2 12 0" stroke="#f0f4ff" stroke-width="1.8" stroke-linecap="round" fill="none"/>
-        <path d="M42 14c3-1 7 1 8 5" stroke="url(#r)" stroke-width="2" stroke-linecap="round" fill="none"/>
-        <circle cx="50" cy="12" r="2" fill="#7fd4f0"/>
-      </svg>
-    `),
-);
+/** App / window icon (Windows prefers .ico; PNG works cross-platform). */
+const APP_ICON_PATH = (() => {
+  const ico = path.join(__dirname, "assets", "icons", "icon.ico");
+  const png = path.join(__dirname, "assets", "icons", "icon.png");
+  if (process.platform === "win32" && fs.existsSync(ico)) return ico;
+  if (fs.existsSync(png)) return png;
+  return null;
+})();
+
+/**
+ * Load tray bitmap. Windows tray does not reliably render SVG data-URLs;
+ * use a small PNG so the icon actually appears in the notification area.
+ */
+function loadTrayIcon() {
+  const candidates = [
+    path.join(__dirname, "assets", "icons", "tray-32.png"),
+    path.join(__dirname, "assets", "icons", "tray.png"),
+    path.join(__dirname, "assets", "icons", "icon.png"),
+    APP_ICON_PATH,
+  ].filter(Boolean);
+
+  for (const p of candidates) {
+    if (!fs.existsSync(p)) continue;
+    const img = nativeImage.createFromPath(p);
+    if (img && !img.isEmpty()) {
+      // Prefer 16–32px for the notification area on Windows.
+      if (img.getSize().width > 32) {
+        return img.resize({ width: 32, height: 32, quality: "best" });
+      }
+      return img;
+    }
+  }
+
+  // Last-resort 1×1 so Tray construction never throws.
+  return nativeImage.createEmpty();
+}
+
+const trayIcon = loadTrayIcon();
 
 function loadPersistedBounds() {
   try {
@@ -245,6 +258,7 @@ function createWindow() {
     hasShadow: false,
     show: false,
     backgroundColor: "#00000000",
+    ...(APP_ICON_PATH ? { icon: APP_ICON_PATH } : {}),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -314,6 +328,11 @@ function createTray() {
 }
 
 app.whenReady().then(() => {
+  // Windows: group taskbar / toast notifications under a stable app id
+  if (process.platform === "win32") {
+    app.setAppUserModelId("com.amanogawa.saya.desktop-pet");
+  }
+
   createWindow();
   createTray();
 
@@ -366,6 +385,7 @@ app.whenReady().then(() => {
       title: payload?.title || "天之川沙夜",
       body: payload?.body || "",
       silent: Boolean(payload?.silent),
+      ...(APP_ICON_PATH ? { icon: APP_ICON_PATH } : {}),
     });
     n.on("click", () => {
       mainWindow?.show();

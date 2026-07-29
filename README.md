@@ -48,10 +48,22 @@ python scripts/build_animations.py
 4. **三档窗口**：紧凑全身 → 快捷栏 → 面板，锚点缩放不乱跳。
 5. **纯陪伴**：不含计时、喝水提醒等效率工具。
 
+## 桌面图标
+
+应用图标在 `assets/icons/`：
+
+| 文件 | 用途 |
+|------|------|
+| `icon.png` / `icon.ico` | 窗口、通知、桌面快捷方式 |
+| `tray-32.png` 等 | 系统托盘（Windows 托盘需位图，不能靠 SVG） |
+
+首次可将图标放到桌面：双击运行 **`创建桌面快捷方式.bat`**，会在桌面生成带沙夜头像的「天之川沙夜」快捷方式。
+
 ## 资源
 
 - `assets/animations/`：**动作帧包**（idle / walk / wave / hop / sit / sleep / drag 等）+ `manifest.json`
 - `assets/animations/default.png`：默认站立帧
+- `assets/icons/`：应用 / 托盘图标
 - `assets/portraits/`：历史立绘（备用）
 - `assets/faces/`：面部裁切（备用）
 - `沙夜原型参考/`：原作向参考图
