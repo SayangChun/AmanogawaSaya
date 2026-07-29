@@ -260,10 +260,10 @@ async function handleMenuAction(action) {
       break;
     case "sit":
       motion.lockFor(6000);
-      motion.play("sit", { force: true, holdMs: 6000 });
       say("talk", { affinityGain: 1 });
       currentLine = "稍微坐下来休息一会儿吧。";
       openBubble(5000);
+      motion.play("sit", { force: true, holdMs: 6000 });
       break;
     case "toggle-wander":
       autoWanderEnabled = !autoWanderEnabled;
