@@ -19,10 +19,13 @@ let currentLine = state.lastLine || "";
 let currentScene = state.lastScene || "boot";
 
 let autoWanderEnabled = true;
-let menuOpen = false;
+/** Bottom shortcut dock open (right-click). */
+let dockOpen = false;
+/** Secondary dock submenu: affinity / stats (under 星轨). */
+let dockStatsOpen = false;
 /** Last applied OS mouse-ignore state (true = click-through empty pixels). */
 let mouseIgnoreActive = null;
-/** Last logical window footprint: compact body vs speak/menu chrome. */
+/** Last logical window footprint: compact | speak | dock | dockStats. */
 let windowChromeMode = "compact";
 
 const zoneTracker = createZoneTracker({
@@ -45,8 +48,8 @@ const motion = createMotionController({
 });
 
 /**
- * Stage focus: keep dock / panel chrome off.
- * Speech bubble is shown — companion lines appear in the floating window.
+ * Stage focus: no full settings panel; speech bubble + bottom shortcut dock.
+ * Dock opens on right-click (replaces the old floating context menu).
  */
 const UI_MINIMAL = true;
 /** When true, dialogue bubble is rendered even in minimal stage mode. */
@@ -103,8 +106,8 @@ async function finishDragWithZone(opts = {}) {
   motion.setPaused?.(false, { skipResume: true });
   wander.resume();
 
-  // If deferred UI or menu owns the next beat, only restore idle once.
-  if (opts.deferUi || menuOpen) {
+  // If deferred UI or dock owns the next beat, only restore idle once.
+  if (opts.deferUi || dockOpen) {
     motion.play("idle", { force: true, fromIdle: true });
     return;
   }
@@ -177,7 +180,7 @@ function applyMouseIgnore(ignore) {
 function isInteractiveTarget(el) {
   if (!el || !(el instanceof Element)) return false;
   if (el.closest("#pet-hit")) return true;
-  if (el.closest("#pet-menu") && !el.closest("#pet-menu.closed")) return true;
+  if (el.closest("#pet-dock") && !el.closest("#pet-dock.closed")) return true;
   if (bubbleOpen && el.closest("#bubble") && !el.closest("#bubble.closed")) return true;
   return false;
 }
@@ -188,12 +191,12 @@ function isInteractiveTarget(el) {
  * @param {number} [clientY]
  */
 function refreshMouseIgnore(clientX, clientY) {
-  if (isDragging || pointerArmed || menuOpen) {
+  if (isDragging || pointerArmed || dockOpen) {
     applyMouseIgnore(false);
     return;
   }
   if (clientX == null || clientY == null) {
-    // No sample point (e.g. after menu close) — default to passthrough.
+    // No sample point (e.g. after dock close) — default to passthrough.
     applyMouseIgnore(true);
     return;
   }
@@ -202,14 +205,24 @@ function refreshMouseIgnore(clientX, clientY) {
 }
 
 /**
- * Grow the OS window when bubble/menu need room; shrink back to body-only.
+ * Grow the OS window when bubble / bottom dock need room; shrink back to body-only.
  * Bottom-center anchor is preserved by main-process setMode.
  * Skips while dragging (main process locks size); call again after release.
  */
 function syncWindowChrome() {
   if (isDragging || pointerArmed) return;
-  const needRoom = Boolean(bubbleOpen || menuOpen);
-  const next = needRoom ? "speak" : "compact";
+  /** @type {"compact" | "speak" | "dock" | "dockStats"} */
+  let next = "compact";
+  if (dockOpen && dockStatsOpen) next = "dockStats";
+  else if (dockOpen) next = "dock";
+  else if (bubbleOpen) next = "speak";
+
+  // Keep CSS mode in sync so dock layout rules apply.
+  const cssMode = dockOpen ? "dock" : "compact";
+  app.classList.remove("mode-compact", "mode-dock", "mode-panel");
+  app.classList.add(`mode-${cssMode}`);
+  if (!UI_MINIMAL) state.mode = cssMode;
+
   if (next === windowChromeMode) return;
   windowChromeMode = next;
   window.petApi?.setMode?.(next);
@@ -234,8 +247,16 @@ function runOrDeferWhileDragging(fn) {
 }
 
 function setMode(mode, { repaint = true } = {}) {
+  // Minimal stage: no full panel; dock is toggled via toggleDock, not mode stack.
   if (UI_MINIMAL) {
-    mode = "compact";
+    if (mode === "panel") mode = "compact";
+    if (mode === "dock") {
+      toggleDock(true);
+      return true;
+    }
+    if (mode === "compact") {
+      toggleDock(false);
+    }
   }
 
   if ((isDragging || pointerArmed) && mode !== state.mode) {
@@ -255,7 +276,7 @@ function setMode(mode, { repaint = true } = {}) {
   app.classList.add(`mode-${mode}`);
   persist();
   if (UI_MINIMAL) {
-    // Footprint is driven by bubble/menu (compact vs speak), not dock/panel.
+    // Footprint is driven by bubble / dock chrome.
     windowChromeMode = "";
     syncWindowChrome();
   } else {
@@ -263,13 +284,6 @@ function setMode(mode, { repaint = true } = {}) {
   }
   if (repaint) paint();
   return true;
-}
-
-function ensureInteractiveMode() {
-  if (UI_MINIMAL) return;
-  if (state.mode === "compact") {
-    setMode("dock");
-  }
 }
 
 function openBubble(ms = 8000) {
@@ -337,6 +351,15 @@ function say(scene, { affinityGain = 0 } = {}) {
   return line;
 }
 
+const TIME_BUCKET_LABELS = {
+  morning: "清晨",
+  noon: "正午",
+  afternoon: "午后",
+  evening: "傍晚",
+  night: "夜晚",
+  lateNight: "深夜",
+};
+
 function updateAffinityDom() {
   const rank = getAffinityRank(state.affinity);
   const valueEl = document.querySelector(".affinity-value");
@@ -344,11 +367,16 @@ function updateAffinityDom() {
   const bar = document.querySelector(".affinity-bar > i");
   const stars = document.querySelector(".stars-row");
   const total = document.querySelector("#stat-interactions");
+  const periodEl = document.querySelector("#stat-period");
   if (valueEl) valueEl.textContent = String(rank.value);
   if (titleEl) titleEl.textContent = rank.title;
   if (bar) bar.style.width = `${rank.value}%`;
   if (stars) stars.textContent = starsHtml(rank.stars);
   if (total) total.textContent = String(state.totalInteractions || 0);
+  if (periodEl) {
+    const bucket = timeBucket();
+    periodEl.textContent = TIME_BUCKET_LABELS[bucket] || "此刻";
+  }
 }
 
 // ---------- particles helper ----------
@@ -370,64 +398,84 @@ function spawnParticles(x, y, symbol = "✨") {
   }
 }
 
-// ---------- menu helper ----------
-/** Place the context menu fully inside the window; flip above cursor when near the bottom. */
-function placeMenuInViewport(menu, clientX, clientY) {
-  const pad = 6;
-  const mw = menu.offsetWidth;
-  const mh = menu.offsetHeight;
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-
-  let left = clientX;
-  let top = clientY;
-
-  // Prefer opening to the right of the cursor; shift left if it would clip.
-  if (left + mw > vw - pad) left = clientX - mw;
-  left = Math.max(pad, Math.min(left, Math.max(pad, vw - mw - pad)));
-
-  // Prefer opening below the cursor; flip above when not enough space under.
-  if (top + mh > vh - pad) top = clientY - mh;
-  top = Math.max(pad, Math.min(top, Math.max(pad, vh - mh - pad)));
-
-  menu.style.left = `${Math.round(left)}px`;
-  menu.style.top = `${Math.round(top)}px`;
-}
-
-function toggleMenu(show, clientX, clientY) {
-  const menu = document.querySelector("#pet-menu");
-  if (!menu) return;
-  menuOpen = Boolean(show);
-  // Expand window first so menu has room, then place (bottom anchor).
+// ---------- bottom shortcut dock ----------
+/**
+ * Show / hide the bottom action dock (right-click).
+ * @param {boolean} show
+ * @param {{ clientX?: number, clientY?: number }} [pointer]
+ */
+function toggleDock(show, pointer = {}) {
+  const dock = document.querySelector("#pet-dock");
+  if (!dock) return;
+  dockOpen = Boolean(show);
+  if (!dockOpen) dockStatsOpen = false;
+  // Expand window first so the bar has room under the sprite (bottom anchor).
   syncWindowChrome();
-  applyMouseIgnore(false);
-  if (menuOpen) {
-    menu.classList.remove("closed");
-    if (clientX != null && clientY != null) {
-      // First paint at the click so layout can measure real size, then clamp.
-      menu.style.left = `${Math.round(clientX)}px`;
-      menu.style.top = `${Math.round(clientY)}px`;
-      // Force layout after un-hiding (display:none → block) and after resize.
-      requestAnimationFrame(() => {
-        void menu.offsetWidth;
-        placeMenuInViewport(menu, clientX, clientY);
-      });
-    }
+  if (dockOpen) {
+    dock.classList.remove("closed");
+    applyMouseIgnore(false);
+    updateDockWanderText();
+    updateDockStatsPanel();
   } else {
-    menu.classList.add("closed");
-    refreshMouseIgnore(clientX, clientY);
+    dock.classList.add("closed");
+    updateDockStatsPanel();
+    refreshMouseIgnore(pointer.clientX, pointer.clientY);
   }
 }
 
-function updateMenuWanderText() {
-  const toggleBtn = document.querySelector("#menu-wander-toggle");
+/**
+ * Toggle secondary stats submenu (affinity / interactions / period).
+ * @param {boolean} [show]
+ */
+function toggleDockStats(show = !dockStatsOpen) {
+  if (!dockOpen && show) {
+    // Ensure primary dock is visible first.
+    toggleDock(true);
+  }
+  dockStatsOpen = Boolean(show) && dockOpen;
+  syncWindowChrome();
+  updateDockStatsPanel();
+  if (dockStatsOpen) updateAffinityDom();
+  applyMouseIgnore(false);
+}
+
+function updateDockStatsPanel() {
+  const panel = document.querySelector("#dock-stats");
+  const toggleBtn = document.querySelector("#dock-stats-toggle");
+  if (panel) {
+    panel.classList.toggle("closed", !dockStatsOpen);
+    panel.setAttribute("aria-hidden", dockStatsOpen ? "false" : "true");
+  }
   if (toggleBtn) {
-    toggleBtn.textContent = autoWanderEnabled ? "🌐 漫游：开启" : "🌐 漫游：关闭";
+    toggleBtn.classList.toggle("is-on", dockStatsOpen);
+    toggleBtn.setAttribute("aria-expanded", dockStatsOpen ? "true" : "false");
+    const lbl = toggleBtn.querySelector(".lbl");
+    if (lbl) lbl.textContent = dockStatsOpen ? "收起" : "星轨";
+    toggleBtn.title = dockStatsOpen ? "收起星轨信息" : "查看星轨亲密度";
   }
 }
 
-async function handleMenuAction(action) {
+function updateDockWanderText() {
+  const toggleBtn = document.querySelector("#dock-wander-toggle");
+  if (!toggleBtn) return;
+  const on = autoWanderEnabled;
+  toggleBtn.classList.toggle("is-on", on);
+  const ico = toggleBtn.querySelector(".ico");
+  const lbl = toggleBtn.querySelector(".lbl");
+  if (ico) ico.textContent = "🌐";
+  if (lbl) lbl.textContent = on ? "漫游" : "定住";
+  toggleBtn.setAttribute("aria-pressed", on ? "true" : "false");
+  toggleBtn.title = on ? "漫游：开启（点击关闭）" : "漫游：关闭（点击开启）";
+}
+
+async function handleDockAction(action) {
   switch (action) {
+    case "stats":
+      toggleDockStats(!dockStatsOpen);
+      break;
+    case "stats-close":
+      toggleDockStats(false);
+      break;
     case "talk":
       say(Math.random() < 0.45 ? timeBucket() : "talk", { affinityGain: 1 });
       break;
@@ -450,6 +498,7 @@ async function handleMenuAction(action) {
         updateBubbleDom();
       }
       persist();
+      updateAffinityDom();
       const ok = await wander.planWalk({ force: true });
       if (!ok) {
         currentLine = "等我一下，现在好像走不开…再试一次好吗？";
@@ -478,6 +527,7 @@ async function handleMenuAction(action) {
       }
       openBubble(5000);
       updateBubbleDom();
+      updateAffinityDom();
       persist();
       motion.play("sit", { force: true, holdMs: 6000 });
       break;
@@ -486,16 +536,18 @@ async function handleMenuAction(action) {
       autoWanderEnabled = !autoWanderEnabled;
       if (autoWanderEnabled) {
         wander.start();
-        say("talk", { affinityGain: 0 });
+        currentScene = "talk";
         currentLine = "嗯，漫游开启啦！我会偶尔在桌面上走走。";
         openBubble(4000);
+        updateBubbleDom();
       } else {
         wander.stop();
-        say("talk", { affinityGain: 0 });
+        currentScene = "talk";
         currentLine = "漫游关闭了。我就站在这里陪着你。";
         openBubble(4000);
+        updateBubbleDom();
       }
-      updateMenuWanderText();
+      updateDockWanderText();
       break;
     case "hide":
       say("hide", { affinityGain: 0 });
@@ -514,7 +566,11 @@ function starsHtml(count) {
 function shellHtml() {
   const rank = getAffinityRank(state.affinity);
   const bubbleClass = bubbleOpen ? "bubble" : "bubble closed";
-  // Menu lives outside .shell so overflow:hidden on the shell cannot clip it.
+  const dockClass = dockOpen ? "dock" : "dock closed";
+  const statsClass = dockStatsOpen ? "dock-sub" : "dock-sub closed";
+  const wanderOn = autoWanderEnabled;
+  const periodLabel = TIME_BUCKET_LABELS[timeBucket()] || "此刻";
+  // Primary dock: actions only. Affinity lives in a secondary submenu (星轨).
   return `
     <div class="shell art-body shell-minimal shell-with-bubble">
       <div class="${bubbleClass}" id="bubble" role="status" aria-live="polite" title="点击与沙夜对话">
@@ -539,19 +595,95 @@ function shellHtml() {
           </div>
         </button>
       </div>
-    </div>
 
-    <div class="pet-menu closed" id="pet-menu" role="menu">
-      <button class="pet-menu-item" data-menu-action="talk" type="button">💬 聊聊天</button>
-      <button class="pet-menu-item" data-menu-action="praise" type="button">✨ 夸夸沙夜</button>
-      <button class="pet-menu-item" data-menu-action="walk" type="button">🚶 散步走走</button>
-      <button class="pet-menu-item" data-menu-action="hop" type="button">🦘 开心小跳</button>
-      <button class="pet-menu-item" data-menu-action="sit" type="button">🪑 坐下休息</button>
-      <button class="pet-menu-item" data-menu-action="toggle-wander" id="menu-wander-toggle" type="button">
-        ${autoWanderEnabled ? "🌐 漫游：开启" : "🌐 漫游：关闭"}
-      </button>
-      <div class="pet-menu-divider"></div>
-      <button class="pet-menu-item danger" data-menu-action="hide" type="button">📌 隐藏到托盘</button>
+      <div class="${dockClass}" id="pet-dock" role="toolbar" aria-label="沙夜快捷栏">
+        <div
+          class="${statsClass}"
+          id="dock-stats"
+          role="region"
+          aria-label="星轨信息"
+          aria-hidden="${dockStatsOpen ? "false" : "true"}"
+        >
+          <div class="dock-sub-head">
+            <span class="dock-sub-title">星轨信息</span>
+            <button class="dock-sub-close" data-dock-action="stats-close" type="button" title="收起">
+              ✕
+            </button>
+          </div>
+          <div class="affinity-card dock-affinity" aria-label="星轨亲密度">
+            <div class="affinity-meta">
+              <div class="label">星轨亲密度</div>
+              <div class="title">${escapeHtml(rank.title)}</div>
+            </div>
+            <div class="affinity-value">${rank.value}</div>
+            <div class="affinity-bar" aria-hidden="true"><i style="width: ${rank.value}%"></i></div>
+            <div class="stars-row" aria-hidden="true">${starsHtml(rank.stars)}</div>
+          </div>
+          <div class="stat-grid dock-stats-grid">
+            <div class="stat-pill">
+              <span>互动次数</span>
+              <strong id="stat-interactions">${state.totalInteractions || 0}</strong>
+            </div>
+            <div class="stat-pill">
+              <span>此刻时段</span>
+              <strong id="stat-period">${periodLabel}</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="dock-actions" role="group" aria-label="快捷操作">
+          <div class="dock-row" role="group" aria-label="互动与动作">
+            <button class="dock-btn primary" data-dock-action="talk" type="button" title="聊聊天">
+              <span class="ico" aria-hidden="true">💬</span>
+              <span class="lbl">聊聊</span>
+            </button>
+            <button class="dock-btn" data-dock-action="praise" type="button" title="夸夸沙夜">
+              <span class="ico" aria-hidden="true">✨</span>
+              <span class="lbl">夸奖</span>
+            </button>
+            <button class="dock-btn" data-dock-action="walk" type="button" title="散步走走">
+              <span class="ico" aria-hidden="true">🚶</span>
+              <span class="lbl">散步</span>
+            </button>
+            <button class="dock-btn" data-dock-action="hop" type="button" title="开心小跳">
+              <span class="ico" aria-hidden="true">🦘</span>
+              <span class="lbl">小跳</span>
+            </button>
+          </div>
+          <div class="dock-row" role="group" aria-label="休息与状态">
+            <button class="dock-btn" data-dock-action="sit" type="button" title="坐下休息">
+              <span class="ico" aria-hidden="true">🪑</span>
+              <span class="lbl">坐下</span>
+            </button>
+            <button
+              class="dock-btn${wanderOn ? " is-on" : ""}"
+              data-dock-action="toggle-wander"
+              id="dock-wander-toggle"
+              type="button"
+              aria-pressed="${wanderOn ? "true" : "false"}"
+              title="${wanderOn ? "漫游：开启（点击关闭）" : "漫游：关闭（点击开启）"}"
+            >
+              <span class="ico" aria-hidden="true">🌐</span>
+              <span class="lbl">${wanderOn ? "漫游" : "定住"}</span>
+            </button>
+            <button
+              class="dock-btn${dockStatsOpen ? " is-on" : ""}"
+              data-dock-action="stats"
+              id="dock-stats-toggle"
+              type="button"
+              aria-expanded="${dockStatsOpen ? "true" : "false"}"
+              title="${dockStatsOpen ? "收起星轨信息" : "查看星轨亲密度"}"
+            >
+              <span class="ico" aria-hidden="true">⭐</span>
+              <span class="lbl">${dockStatsOpen ? "收起" : "星轨"}</span>
+            </button>
+            <button class="dock-btn danger" data-dock-action="hide" type="button" title="隐藏到托盘">
+              <span class="ico" aria-hidden="true">📌</span>
+              <span class="lbl">隐藏</span>
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -583,7 +715,7 @@ function paintStars() {
 function bind() {
   const pet = document.querySelector("#pet-hit");
   const bubble = document.querySelector("#bubble");
-  const menu = document.querySelector("#pet-menu");
+  const dock = document.querySelector("#pet-dock");
 
   if (bubble) {
     bubble.addEventListener("click", (e) => {
@@ -593,27 +725,28 @@ function bind() {
     });
   }
 
-  if (menu) {
-    menu.addEventListener("pointerdown", (e) => {
+  if (dock) {
+    dock.addEventListener("pointerdown", (e) => {
       e.stopPropagation();
     });
 
-    menu.addEventListener("pointerup", (e) => {
+    dock.addEventListener("pointerup", (e) => {
       e.stopPropagation();
     });
 
-    menu.addEventListener("click", async (e) => {
-      const btn = e.target.closest("[data-menu-action]");
+    dock.addEventListener("click", async (e) => {
+      const btn = e.target.closest("[data-dock-action]");
       if (!btn) return;
       e.stopPropagation();
-      toggleMenu(false);
-      const act = btn.getAttribute("data-menu-action");
-      await handleMenuAction(act);
+      const act = btn.getAttribute("data-dock-action");
+      // Keep dock open for multi-actions; hide still closes via window hide.
+      if (act === "hide") toggleDock(false);
+      await handleDockAction(act);
     });
   }
 
   if (pet) {
-    const isMenuEvent = (event) => Boolean(event.target?.closest?.("#pet-menu"));
+    const isDockEvent = (event) => Boolean(event.target?.closest?.("#pet-dock"));
 
     const finishPointer = (treatAsDrag) => {
       const session = drag;
@@ -666,8 +799,9 @@ function bind() {
 
     pet.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
-      if (isMenuEvent(event)) return;
-      toggleMenu(false);
+      if (isDockEvent(event)) return;
+      // Drag / click on body closes the shortcut bar so it does not steal space.
+      if (dockOpen) toggleDock(false, { clientX: event.clientX, clientY: event.clientY });
       isDragging = false;
       pointerArmed = true;
       pendingAfterDrag = null;
@@ -724,9 +858,6 @@ function bind() {
       if (dragged) return;
       if (Date.now() < suppressClickUntil) return;
 
-      if (state.mode === "compact" && !UI_MINIMAL) {
-        ensureInteractiveMode();
-      }
       const scene = Math.random() < 0.55 ? timeBucket() : "tap";
       say(scene, { affinityGain: 1 });
       const rect = pet.getBoundingClientRect();
@@ -747,15 +878,15 @@ function bind() {
       event.preventDefault();
       event.stopPropagation();
       if (isDragging) return;
-      // Use viewport coords so fixed menu can clamp to the floating window.
-      toggleMenu(true, event.clientX, event.clientY);
+      // Right-click toggles the bottom shortcut dock (replaces old context menu).
+      toggleDock(!dockOpen, { clientX: event.clientX, clientY: event.clientY });
     });
 
     pet.addEventListener("dblclick", (event) => {
       event.preventDefault();
       event.stopPropagation();
       if (isDragging || Date.now() < suppressClickUntil) return;
-      toggleMenu(false);
+      if (dockOpen) toggleDock(false, { clientX: event.clientX, clientY: event.clientY });
       const scene = Math.random() < 0.5 ? "affinityUp" : "praise";
       say(scene, { affinityGain: 2 });
       const rect = pet.getBoundingClientRect();
@@ -788,23 +919,27 @@ document.addEventListener(
 );
 
 document.addEventListener("pointerleave", () => {
-  if (isDragging || pointerArmed || menuOpen) return;
+  if (isDragging || pointerArmed || dockOpen) return;
   applyMouseIgnore(true);
 });
 
 document.addEventListener("click", (e) => {
-  if (menuOpen && !e.target.closest("#pet-menu")) {
-    toggleMenu(false, e.clientX, e.clientY);
-  }
+  if (!dockOpen) return;
+  if (e.target.closest("#pet-dock") || e.target.closest("#pet-hit")) return;
+  toggleDock(false, { clientX: e.clientX, clientY: e.clientY });
 });
 
 function paint() {
   motion.detach();
-  if (UI_MINIMAL) state.mode = "compact";
+  if (UI_MINIMAL && !dockOpen) state.mode = "compact";
+  const cssMode = dockOpen ? "dock" : state.mode === "dock" ? "dock" : "compact";
   app.classList.remove("mode-compact", "mode-dock", "mode-panel");
-  app.classList.add(`mode-${state.mode}`);
+  app.classList.add(`mode-${cssMode}`);
   app.innerHTML = shellHtml();
   bind();
+  updateDockWanderText();
+  updateDockStatsPanel();
+  updateAffinityDom();
 }
 
 // ---------- boot ----------
@@ -833,8 +968,24 @@ function boot() {
 
   window.petApi?.onSetMode?.((mode) => {
     if (!mode) return;
-    if (mode === "speak" || mode === "compact") {
+    if (mode === "speak" || mode === "compact" || mode === "dock" || mode === "dockStats") {
       windowChromeMode = mode;
+      if (mode === "dock" || mode === "dockStats") {
+        dockOpen = true;
+        dockStatsOpen = mode === "dockStats";
+        document.querySelector("#pet-dock")?.classList.remove("closed");
+        app.classList.remove("mode-compact", "mode-dock", "mode-panel");
+        app.classList.add("mode-dock");
+        updateDockStatsPanel();
+      } else if (mode === "compact" && dockOpen) {
+        // Main/tray forced compact — collapse dock chrome in renderer too.
+        dockOpen = false;
+        dockStatsOpen = false;
+        document.querySelector("#pet-dock")?.classList.add("closed");
+        app.classList.remove("mode-compact", "mode-dock", "mode-panel");
+        app.classList.add("mode-compact");
+        updateDockStatsPanel();
+      }
       return;
     }
     if (UI_MINIMAL) {
@@ -848,13 +999,20 @@ function boot() {
 
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
-    if (UI_MINIMAL || state.mode === "compact") {
-      window.petApi?.hide?.();
+    if (dockStatsOpen) {
+      toggleDockStats(false);
       return;
     }
-    setMode("compact");
-    bubbleOpen = false;
-    updateBubbleDom();
+    if (dockOpen) {
+      toggleDock(false);
+      return;
+    }
+    if (bubbleOpen) {
+      bubbleOpen = false;
+      updateBubbleDom();
+      return;
+    }
+    window.petApi?.hide?.();
   }
 });
 

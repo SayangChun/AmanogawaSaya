@@ -36,7 +36,10 @@ const WINDOW_MODES = {
   compact: { width: 136, height: 196 },
   // Bubble above body (short 1–2 line lines)
   speak: { width: 196, height: 272 },
-  dock: { width: 280, height: 400 },
+  // Body + two-row compact action dock (+ room for optional bubble)
+  dock: { width: 280, height: 320 },
+  // Dock + secondary stats submenu (affinity / counts)
+  dockStats: { width: 288, height: 440 },
   panel: { width: 340, height: 520 },
 };
 
@@ -176,11 +179,11 @@ function clampToWorkArea(x, y, width, height) {
  * Blocked while the user is dragging the pet (window must not grow mid-drag).
  */
 function setMode(mode, { animate = false, force = false } = {}) {
-  // Stage focus: only compact / speak chrome — no dock / panel.
-  if (mode === "dock" || mode === "panel") {
+  // Full settings panel still unused — keep window compact if asked for panel.
+  if (mode === "panel") {
     mode = "compact";
   }
-  // Menu needs roughly the same footprint as the speech bubble layout.
+  // Legacy alias: floating context menu used speak-sized chrome.
   if (mode === "menu") {
     mode = "speak";
   }

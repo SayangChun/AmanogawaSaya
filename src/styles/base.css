@@ -34,7 +34,7 @@ body {
   font-family: var(--font);
   color: var(--text);
   /* Desktop pet: empty chrome must not form a hit rectangle.
-     Interactive nodes (pet-hit / bubble / menu) opt back in. */
+     Interactive nodes (pet-hit / bubble / dock) opt back in. */
   pointer-events: none;
 }
 
