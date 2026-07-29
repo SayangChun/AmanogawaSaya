@@ -207,10 +207,48 @@ def strip_pink_stroke(im: Image.Image) -> Image.Image:
     return Image.fromarray(arr, "RGBA")
 
 
-def process(src: Path, thr: int = 18) -> Image.Image:
+def recolor_shy_blush(im: Image.Image) -> Image.Image:
+    """Tint the generated shy cheek hatching pink instead of near-black."""
+    import numpy as np
+
+    arr = np.array(im.convert("RGBA"), dtype=np.uint8)
+    h, w = arr.shape[:2]
+    yy, xx = np.mgrid[:h, :w]
+    rgb = arr[:, :, :3].astype(np.float32)
+    a = arr[:, :, 3]
+    r, g, b = rgb[:, :, 0], rgb[:, :, 1], rgb[:, :, 2]
+
+    # The blush marks live in a small oval under the eyes. Limit the mask to
+    # that area so hair, eye detail, and hand outlines keep their original tones.
+    face_oval = (((xx - 258) / 62) ** 2 + ((yy - 112) / 23) ** 2) <= 1
+    near_black_hatch = (
+        (a > 0)
+        & face_oval
+        & (r <= 95)
+        & (g <= 80)
+        & (b <= 80)
+        & ((np.maximum.reduce([r, g, b]) - np.minimum.reduce([r, g, b])) <= 42)
+    )
+    transparent_hatch = (a < 35) & face_oval & (xx >= 220) & (xx <= 302) & (yy >= 98) & (yy <= 126)
+
+    if near_black_hatch.any() or transparent_hatch.any():
+        shade = np.clip(0.55 + (95 - np.maximum.reduce([r, g, b])) / 120, 0.55, 1.0)
+        pink = np.array([234, 104, 132], dtype=np.float32)
+        softened = np.clip(pink[None, None, :] * shade[:, :, None], 0, 255)
+        arr[near_black_hatch, :3] = softened[near_black_hatch].astype(np.uint8)
+        arr[transparent_hatch, :3] = np.array([232, 98, 128], dtype=np.uint8)
+        arr[transparent_hatch, 3] = 215
+
+    return Image.fromarray(arr, "RGBA")
+
+
+def process(src: Path, thr: int = 18, shy_blush: bool = False) -> Image.Image:
     im = key_black_bg(Image.open(src), thr=thr)
     im = strip_pink_stroke(im)
-    return fit_canvas(im)
+    im = fit_canvas(im)
+    if shy_blush:
+        im = recolor_shy_blush(im)
+    return im
 
 
 def save_seq(name: str, frames: list[Image.Image]) -> list[str]:
@@ -230,7 +268,7 @@ def save_seq(name: str, frames: list[Image.Image]) -> list[str]:
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     print("Processing poses...")
-    poses = {k: process(v) for k, v in POSE_SRC.items()}
+    poses = {k: process(v, shy_blush=(k == "shy")) for k, v in POSE_SRC.items()}
     base = process(BASE, thr=12)
     soft = process(SOFT, thr=12)
     smile = process(SMILE, thr=12)

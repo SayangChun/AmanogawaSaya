@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld("petApi", {
     ipcRenderer.send("pet:set-dragging", dragging);
   },
   bounds: () => ipcRenderer.invoke("pet:bounds"),
+  workArea: () => ipcRenderer.invoke("pet:work-area"),
   setMode: (mode) => ipcRenderer.invoke("pet:set-mode", mode),
   notify: (payload) => ipcRenderer.invoke("pet:notify", payload),
   getPath: (name) => ipcRenderer.invoke("pet:get-path", name),

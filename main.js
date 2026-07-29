@@ -377,6 +377,14 @@ app.whenReady().then(() => {
 
   ipcMain.handle("pet:bounds", () => mainWindow?.getBounds() ?? null);
 
+  /** Work area of the display that currently holds the pet window. */
+  ipcMain.handle("pet:work-area", () => {
+    if (!mainWindow) return null;
+    const bounds = mainWindow.getBounds();
+    const display = screen.getDisplayMatching(bounds);
+    return display?.workArea ?? screen.getPrimaryDisplay().workArea;
+  });
+
   ipcMain.handle("pet:set-mode", (_e, mode) => setMode(mode));
 
   ipcMain.handle("pet:notify", (_e, payload) => {

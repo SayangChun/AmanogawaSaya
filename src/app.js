@@ -1,6 +1,7 @@
 import { CHARACTER, getAffinityRank } from "./character/profile.js";
 import { speak, timeBucket } from "./character/dialogue.js";
 import { createMotionController } from "./character/motion.js";
+import { createWanderController } from "./character/wander.js";
 import { loadState, saveState, gainAffinity } from "./state.js";
 
 const app = document.querySelector("#app");
@@ -13,6 +14,10 @@ const CLICK_SUPPRESS_MS = 500;
 let state = loadState();
 let currentLine = state.lastLine || "";
 let currentScene = state.lastScene || "boot";
+
+let autoWanderEnabled = true;
+let menuOpen = false;
+
 /**
  * Stage focus: keep dock / panel chrome off.
  * Speech bubble is shown — companion lines appear in the floating window.
@@ -42,6 +47,25 @@ let suppressClickUntil = 0;
 /** @type {null | (() => void)} */
 let pendingAfterDrag = null;
 
+function isPointerBlocked() {
+  return isDragging || pointerArmed || Date.now() < suppressClickUntil;
+}
+
+const wander = createWanderController({
+  motion,
+  moveBy: (delta) => window.petApi?.moveBy?.(delta),
+  getBounds: () => window.petApi?.bounds?.() ?? Promise.resolve(null),
+  getWorkArea: () => window.petApi?.workArea?.() ?? Promise.resolve(null),
+  isBlocked: () => isPointerBlocked(),
+  onRoamStart: (_kind) => {
+    if (Math.random() < 0.15 && !bubbleOpen) {
+      const line = speak(timeBucket(), { affinity: state.affinity });
+      currentLine = line.text;
+      openBubble(4500);
+    }
+  },
+});
+
 function setDraggingLock(on) {
   window.petApi?.setDragging?.(Boolean(on));
 }
@@ -51,10 +75,6 @@ function persist() {
   state.lastLine = currentLine;
   state.lastScene = currentScene;
   saveState(state);
-}
-
-function isPointerBlocked() {
-  return isDragging || pointerArmed || Date.now() < suppressClickUntil;
 }
 
 /**
@@ -69,12 +89,10 @@ function runOrDeferWhileDragging(fn) {
 }
 
 function setMode(mode, { repaint = true } = {}) {
-  // Minimal stage: always stay compact — no dock / panel chrome.
   if (UI_MINIMAL) {
     mode = "compact";
   }
 
-  // Never resize / re-layout while the user is interacting with the pet body.
   if ((isDragging || pointerArmed) && mode !== state.mode) {
     pendingAfterDrag = () => setMode(mode, { repaint });
     return false;
@@ -96,7 +114,6 @@ function setMode(mode, { repaint = true } = {}) {
   return true;
 }
 
-/** Expand compact → dock only on intentional interaction, never mid-drag. */
 function ensureInteractiveMode() {
   if (UI_MINIMAL) return;
   if (state.mode === "compact") {
@@ -180,18 +197,109 @@ function updateAffinityDom() {
   if (total) total.textContent = String(state.totalInteractions || 0);
 }
 
+// ---------- particles helper ----------
+function spawnParticles(x, y, symbol = "✨") {
+  const stage = document.querySelector("#stage");
+  if (!stage) return;
+  for (let i = 0; i < 5; i++) {
+    const p = document.createElement("span");
+    p.className = "pet-particle";
+    p.textContent = symbol;
+    const offsetX = (Math.random() - 0.5) * 50;
+    const offsetY = (Math.random() - 0.5) * 30;
+    p.style.left = `${Math.max(10, Math.min(x + offsetX, 120))}px`;
+    p.style.top = `${Math.max(10, Math.min(y + offsetY, 160))}px`;
+    p.style.setProperty("--dx", `${(Math.random() - 0.5) * 50}px`);
+    p.style.setProperty("--dy", `${-30 - Math.random() * 40}px`);
+    stage.appendChild(p);
+    setTimeout(() => p.remove(), 900);
+  }
+}
+
+// ---------- menu helper ----------
+function toggleMenu(show, x, y) {
+  const menu = document.querySelector("#pet-menu");
+  if (!menu) return;
+  menuOpen = Boolean(show);
+  if (menuOpen) {
+    if (x != null && y != null) {
+      menu.style.left = `${Math.min(x, 70)}px`;
+      menu.style.top = `${Math.max(10, Math.min(y, 80))}px`;
+    }
+    menu.classList.remove("closed");
+  } else {
+    menu.classList.add("closed");
+  }
+}
+
+function updateMenuWanderText() {
+  const toggleBtn = document.querySelector("#menu-wander-toggle");
+  if (toggleBtn) {
+    toggleBtn.textContent = autoWanderEnabled ? "🌐 漫游：开启" : "🌐 漫游：关闭";
+  }
+}
+
+async function handleMenuAction(action) {
+  switch (action) {
+    case "talk":
+      say(Math.random() < 0.45 ? timeBucket() : "talk", { affinityGain: 1 });
+      break;
+    case "praise":
+      say("praise", { affinityGain: 2 });
+      spawnParticles(70, 90, "💖");
+      break;
+    case "walk":
+      say("talk", { affinityGain: 1 });
+      currentLine = "要在桌面上走走吗？好的~";
+      openBubble(4000);
+      await wander.planWalk();
+      break;
+    case "hop":
+      wander.planHop();
+      spawnParticles(70, 90, "✨");
+      break;
+    case "sit":
+      motion.lockFor(6000);
+      motion.play("sit", { force: true, holdMs: 6000 });
+      say("talk", { affinityGain: 1 });
+      currentLine = "稍微坐下来休息一会儿吧。";
+      openBubble(5000);
+      break;
+    case "toggle-wander":
+      autoWanderEnabled = !autoWanderEnabled;
+      if (autoWanderEnabled) {
+        wander.start();
+        say("talk", { affinityGain: 0 });
+        currentLine = "嗯，漫游开启啦！我会偶尔在桌面上走走。";
+        openBubble(4000);
+      } else {
+        wander.stop();
+        say("talk", { affinityGain: 0 });
+        currentLine = "漫游关闭了。我就站在这里陪着你。";
+        openBubble(4000);
+      }
+      updateMenuWanderText();
+      break;
+    case "hide":
+      say("hide", { affinityGain: 0 });
+      setTimeout(() => window.petApi?.hide?.(), 400);
+      break;
+    default:
+      break;
+  }
+}
+
 // ---------- render ----------
 function starsHtml(count) {
   return "★".repeat(count) + "☆".repeat(Math.max(0, 6 - count));
 }
 
 function shellHtml() {
-  // Minimal stage: Saya + speech bubble (no dock / panel chrome).
   const rank = getAffinityRank(state.affinity);
   const bubbleClass = bubbleOpen ? "bubble" : "bubble closed";
   return `
     <div class="shell art-body shell-minimal shell-with-bubble">
-      <div class="${bubbleClass}" id="bubble" role="status" aria-live="polite">
+      <div class="${bubbleClass}" id="bubble" role="status" aria-live="polite" title="点击与沙夜对话">
         <div class="bubble-meta">
           <span class="bubble-name">${CHARACTER.shortName}</span>
           <span class="bubble-rank">${rank.title}</span>
@@ -202,6 +310,19 @@ function shellHtml() {
       <div class="stage" id="stage">
         <div class="stars" id="stars" aria-hidden="true"></div>
         <div class="stage-glow"></div>
+
+        <div class="pet-menu closed" id="pet-menu" role="menu">
+          <button class="pet-menu-item" data-menu-action="talk" type="button">💬 聊聊天</button>
+          <button class="pet-menu-item" data-menu-action="praise" type="button">✨ 夸夸沙夜</button>
+          <button class="pet-menu-item" data-menu-action="walk" type="button">🚶 散步走走</button>
+          <button class="pet-menu-item" data-menu-action="hop" type="button">🦘 开心小跳</button>
+          <button class="pet-menu-item" data-menu-action="sit" type="button">🪑 坐下休息</button>
+          <button class="pet-menu-item" data-menu-action="toggle-wander" id="menu-wander-toggle" type="button">
+            ${autoWanderEnabled ? "🌐 漫游：开启" : "🌐 漫游：关闭"}
+          </button>
+          <div class="pet-menu-divider"></div>
+          <button class="pet-menu-item danger" data-menu-action="hide" type="button">📌 隐藏到托盘</button>
+        </div>
 
         <button class="pet-hit" id="pet-hit" type="button" aria-label="拖动天之川沙夜">
           <div class="pet-actor act-idle" id="pet-actor" data-action="idle">
@@ -243,16 +364,39 @@ function paintStars() {
 
 function bind() {
   const pet = document.querySelector("#pet-hit");
-  const actions = document.querySelectorAll("[data-action]");
+  const bubble = document.querySelector("#bubble");
+  const menu = document.querySelector("#pet-menu");
 
-  actions.forEach((el) => {
-    el.addEventListener("click", async (e) => {
+  if (bubble) {
+    bubble.addEventListener("click", (e) => {
+      if (!bubbleOpen) return;
       e.stopPropagation();
-      await handleAction(el.getAttribute("data-action"));
+      say(Math.random() < 0.5 ? timeBucket() : "talk", { affinityGain: 1 });
     });
-  });
+  }
+
+  if (menu) {
+    menu.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+    });
+
+    menu.addEventListener("pointerup", (e) => {
+      e.stopPropagation();
+    });
+
+    menu.addEventListener("click", async (e) => {
+      const btn = e.target.closest("[data-menu-action]");
+      if (!btn) return;
+      e.stopPropagation();
+      toggleMenu(false);
+      const act = btn.getAttribute("data-menu-action");
+      await handleMenuAction(act);
+    });
+  }
 
   if (pet) {
+    const isMenuEvent = (event) => Boolean(event.target?.closest?.("#pet-menu"));
+
     const finishPointer = (treatAsDrag) => {
       const session = drag;
       const dragged = Boolean(treatAsDrag || isDragging || session?.moved);
@@ -264,6 +408,7 @@ function bind() {
       pet.classList.remove("is-dragging");
       setDraggingLock(false);
       motion.setPaused?.(false);
+      wander.resume();
 
       if (!hadPointer) return false;
 
@@ -271,7 +416,6 @@ function bind() {
         suppressClickUntil = Date.now() + CLICK_SUPPRESS_MS;
         const deferred = pendingAfterDrag;
         pendingAfterDrag = null;
-        // Only run deferred mode changes after drag fully ends — never mid-gesture.
         if (deferred) {
           requestAnimationFrame(() => {
             if (!isDragging && !pointerArmed) deferred();
@@ -286,9 +430,12 @@ function bind() {
 
     pet.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
+      if (isMenuEvent(event)) return;
+      toggleMenu(false);
       isDragging = false;
       pointerArmed = true;
       pendingAfterDrag = null;
+      wander.pause();
       drag = {
         pointerId: event.pointerId,
         lastX: event.screenX,
@@ -300,7 +447,7 @@ function bind() {
       try {
         pet.setPointerCapture(event.pointerId);
       } catch {
-        // ignore capture failures on some hosts
+        // ignore capture failures
       }
     });
 
@@ -318,10 +465,10 @@ function bind() {
       if (!isDragging && dist >= DRAG_THRESHOLD_PX) {
         isDragging = true;
         pet.classList.add("is-dragging");
-        // Drop any pending enlarge; lock main-process window size.
         pendingAfterDrag = null;
         setDraggingLock(true);
         motion.setPaused?.(true);
+        wander.pause();
       }
       if (!isDragging) return;
 
@@ -341,13 +488,13 @@ function bind() {
       if (dragged) return;
       if (Date.now() < suppressClickUntil) return;
 
-      // Pure click: speak (time-of-day or tap). No dock/panel enlarge in minimal mode.
       if (state.mode === "compact" && !UI_MINIMAL) {
         ensureInteractiveMode();
       }
-      // Prefer time-bucket lines so noon / afternoon greetings surface in the window.
       const scene = Math.random() < 0.55 ? timeBucket() : "tap";
       say(scene, { affinityGain: 1 });
+      const rect = pet.getBoundingClientRect();
+      spawnParticles(event.clientX - rect.left, event.clientY - rect.top, "✨");
     });
 
     pet.addEventListener("pointercancel", (event) => {
@@ -359,6 +506,27 @@ function bind() {
       if (!drag && !isDragging && !pointerArmed) return;
       finishPointer(true);
     });
+
+    pet.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (isDragging) return;
+      const rect = pet.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+      toggleMenu(true, x, y);
+    });
+
+    pet.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (isDragging || Date.now() < suppressClickUntil) return;
+      toggleMenu(false);
+      const scene = Math.random() < 0.5 ? "affinityUp" : "praise";
+      say(scene, { affinityGain: 2 });
+      const rect = pet.getBoundingClientRect();
+      spawnParticles(event.clientX - rect.left, event.clientY - rect.top, Math.random() < 0.5 ? "💖" : "✨");
+    });
   }
 
   motion.attach(pet, {
@@ -366,42 +534,19 @@ function bind() {
       if (isDragging) return;
       setArtStyle(art);
     },
+    actionChange: (actionId, meta) => {
+      wander.onAction(actionId, meta);
+    },
   });
 
   paintStars();
 }
 
-async function handleAction(action) {
-  if (UI_MINIMAL && action !== "hide" && action !== "compact") {
-    return;
+document.addEventListener("click", (e) => {
+  if (menuOpen && !e.target.closest("#pet-menu")) {
+    toggleMenu(false);
   }
-  switch (action) {
-    case "talk":
-      say(Math.random() < 0.45 ? timeBucket() : "talk", { affinityGain: 1 });
-      break;
-    case "praise":
-      say("praise", { affinityGain: 2 });
-      break;
-    case "greet":
-      say(timeBucket(), { affinityGain: 1 });
-      break;
-    case "panel":
-      if (UI_MINIMAL) return;
-      setMode("panel");
-      break;
-    case "compact":
-      setMode("compact");
-      bubbleOpen = false;
-      updateBubbleDom();
-      break;
-    case "hide":
-      if (!UI_MINIMAL) say("hide", { affinityGain: 0 });
-      setTimeout(() => window.petApi?.hide?.(), 400);
-      break;
-    default:
-      break;
-  }
-}
+});
 
 function paint() {
   motion.detach();
@@ -425,16 +570,15 @@ function boot() {
   currentScene = line.scene;
   currentLine = line.text;
   state.artStyle = "body";
-  // Show companion line in the floating window on launch.
   openBubble(10000);
   persist();
   paint();
   motion.playScene(currentScene);
+  wander.start();
   window.petApi?.setMode?.("compact");
 
   window.petApi?.onSetMode?.((mode) => {
     if (!mode) return;
-    // Ignore dock/panel requests while UI is minimal.
     if (UI_MINIMAL) {
       setMode("compact", { repaint: false });
       return;

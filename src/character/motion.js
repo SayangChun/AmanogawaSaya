@@ -60,10 +60,8 @@ const IDLE_POOL = [
   "soft",
   "breathe",
   "wave",
-  "walk",
   "stretch",
   "sit",
-  "hop",
 ];
 
 const SCENE_ACTION = {
@@ -111,6 +109,8 @@ export function createMotionController() {
   let actor = null;
 
   let currentAction = "idle";
+  /** @type {"left" | "right"} */
+  let facing = "right";
   let frontIsA = true;
   let actionTimer = null;
   let idleTimer = null;
@@ -121,6 +121,8 @@ export function createMotionController() {
   let savedBeforePause = "idle";
   /** @type {(art: string) => void} */
   let onArtChange = () => {};
+  /** @type {(actionId: string, meta: { fromIdle?: boolean, holdMs?: number|null }) => void} */
+  let onActionChange = () => {};
 
   /** frame playback state */
   let frameIndex = 0;
@@ -184,6 +186,34 @@ export function createMotionController() {
     }
     actor.classList.add(def.css || `act-${actionId}`);
     actor.dataset.action = actionId;
+    applyFacingClass();
+  }
+
+  function applyFacingClass() {
+    if (!actor) return;
+    actor.classList.toggle("facing-left", facing === "left");
+    actor.classList.toggle("facing-right", facing === "right");
+    actor.dataset.facing = facing;
+  }
+
+  /**
+   * Face left or right (sprite flip). Used by wander locomotion.
+   * @param {"left" | "right" | number} dir  negative dx → left
+   */
+  function setFacing(dir) {
+    if (typeof dir === "number") {
+      if (dir === 0) return;
+      facing = dir < 0 ? "left" : "right";
+    } else if (dir === "left" || dir === "right") {
+      facing = dir;
+    } else {
+      return;
+    }
+    applyFacingClass();
+  }
+
+  function getFacing() {
+    return facing;
   }
 
   function resolveUrl(url) {
@@ -331,7 +361,8 @@ export function createMotionController() {
 
     clearActionTimer();
     const hold = opts.holdMs ?? def.duration;
-    if (hold && !def.loop) {
+    // Timed actions (including looping clips like walk): hold then fall back to idle/sleep.
+    if (hold && hold > 0) {
       lockedUntil = now + hold;
       const played = actionId;
       actionTimer = setTimeout(() => {
@@ -343,9 +374,22 @@ export function createMotionController() {
         const fallback = ctx === "sleep" ? "sleep" : "idle";
         play(fallback, { force: true, fromIdle: true });
       }, hold);
-    } else {
-      lockedUntil = def.loop ? 0 : now + 800;
+    } else if (def.loop) {
+      // Endless loop (idle / sleep) — idle pool may swap later.
+      lockedUntil = 0;
       scheduleIdle();
+    } else {
+      lockedUntil = now + 800;
+      scheduleIdle();
+    }
+
+    try {
+      onActionChange(actionId, {
+        fromIdle: Boolean(opts.fromIdle),
+        holdMs: hold ?? null,
+      });
+    } catch {
+      // ignore listener errors
     }
   }
 
@@ -372,12 +416,13 @@ export function createMotionController() {
     }
   }
 
-  function attach(petHitEl, { artChange } = {}) {
+  function attach(petHitEl, { artChange, actionChange } = {}) {
     root = petHitEl;
     actor = petHitEl?.querySelector("#pet-actor");
     layerA = petHitEl?.querySelector("#pet-layer-a");
     layerB = petHitEl?.querySelector("#pet-layer-b");
     if (typeof artChange === "function") onArtChange = artChange;
+    if (typeof actionChange === "function") onActionChange = actionChange;
 
     if (!actor || !layerA || !layerB) return;
 
@@ -406,6 +451,21 @@ export function createMotionController() {
     actor = null;
     layerA = null;
     layerB = null;
+    onActionChange = () => {};
+  }
+
+  /** Soft lock window so idle pool won't interrupt (e.g. during roam). */
+  function lockFor(ms) {
+    const until = Date.now() + Math.max(0, Number(ms) || 0);
+    if (until > lockedUntil) lockedUntil = until;
+  }
+
+  function isPaused() {
+    return paused;
+  }
+
+  function isEnabled() {
+    return enabled;
   }
 
   function playScene(scene, extra = {}) {
@@ -426,7 +486,12 @@ export function createMotionController() {
     playScene,
     setContext,
     setPaused,
+    setFacing,
+    getFacing,
     getAction,
     scheduleIdle,
+    lockFor,
+    isPaused,
+    isEnabled,
   };
 }
