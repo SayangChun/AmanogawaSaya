@@ -7,6 +7,12 @@
 
 import { CHARACTER } from "./profile.js";
 import { ANIM_MANIFEST } from "./anim-manifest.js";
+import {
+  ZONE_CONFIG,
+  pickWeightedAction,
+  markActionCooldown,
+  isLookishAction,
+} from "./screen-zone.js";
 
 /** @typedef {string} ActionId */
 
@@ -98,7 +104,20 @@ export function portraitUrl(key) {
   return bodyUrl(key === "calm" || key === "idle" ? "default" : key);
 }
 
-export function createMotionController() {
+/**
+ * @param {{
+ *   getZoneSnapshot?: (opts?: { ensureFresh?: boolean }) =>
+ *     | null
+ *     | { zoneId?: string, idleWeights?: Record<string, number>, facingHint?: "left"|"right"|null }
+ *     | Promise<null | { zoneId?: string, idleWeights?: Record<string, number>, facingHint?: "left"|"right"|null }>,
+ *   getLastZoneId?: () => string|null,
+ *   onZoneSit?: (zoneId: string|null) => void,
+ * }} [deps]
+ */
+export function createMotionController(deps = {}) {
+  const getZoneSnapshot = deps.getZoneSnapshot || null;
+  const getLastZoneId = deps.getLastZoneId || null;
+
   /** @type {HTMLElement|null} */
   let root = null;
   /** @type {HTMLImageElement|null} */
@@ -139,6 +158,12 @@ export function createMotionController() {
   /** Invalidates in-flight image load handlers so stale swaps cannot double-show layers. */
   let swapToken = 0;
 
+  /** actionId → readyAt ms */
+  /** @type {Map<string, number>} */
+  const actionCooldowns = new Map();
+  /** After playScene hold ends, suppress sit-heavy zone picks */
+  let postSceneUntil = 0;
+
   function clearActionTimer() {
     if (actionTimer) {
       clearTimeout(actionTimer);
@@ -160,25 +185,82 @@ export function createMotionController() {
     }
   }
 
+  function stampZoneDom(zoneId) {
+    if (!actor) return;
+    const z = zoneId || (typeof getLastZoneId === "function" ? getLastZoneId() : null);
+    if (z) actor.dataset.zone = z;
+  }
+
+  async function tickIdle() {
+    if (!enabled || paused || Date.now() < lockedUntil) {
+      scheduleIdle();
+      return;
+    }
+    if (currentAction === "sleep") {
+      play(Math.random() < 0.35 ? "breathe" : "sleep", { fromIdle: true });
+      return;
+    }
+    if (currentAction === "drag") {
+      scheduleIdle();
+      return;
+    }
+
+    let pick = null;
+    let zoneIdForDom = null;
+
+    try {
+      let snap = null;
+      if (typeof getZoneSnapshot === "function") {
+        snap = await Promise.resolve(getZoneSnapshot({ ensureFresh: true }));
+      }
+
+      // POST-AWAIT GUARDS
+      if (!enabled || paused || Date.now() < lockedUntil) {
+        scheduleIdle();
+        return;
+      }
+      if (currentAction === "sleep" || currentAction === "drag") {
+        scheduleIdle();
+        return;
+      }
+
+      if (Date.now() < postSceneUntil) {
+        pick = Math.random() < 0.5 ? "breathe" : "calm";
+      } else if (snap?.idleWeights) {
+        zoneIdForDom = snap.zoneId || null;
+        pick = pickWeightedAction(snap.idleWeights, actionCooldowns, Date.now(), ACTIONS);
+        if (snap.facingHint && isLookishAction(pick)) {
+          setFacing(snap.facingHint);
+        }
+      }
+    } catch {
+      pick = null;
+    }
+
+    if (!pick || pick === "idle") {
+      pick = IDLE_POOL[Math.floor(Math.random() * IDLE_POOL.length)];
+    }
+
+    stampZoneDom(zoneIdForDom);
+    markActionCooldown(pick, actionCooldowns);
+    play(pick, { fromIdle: true });
+
+    // Rare quiet line when zone-picked sit (caller may also settle-sit with speech).
+    if (pick === "sit" && typeof deps.onZoneSit === "function") {
+      try {
+        deps.onZoneSit(zoneIdForDom || (typeof getLastZoneId === "function" ? getLastZoneId() : null));
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
   function scheduleIdle() {
     clearIdleTimer();
     if (!enabled) return;
     const wait = 4000 + Math.random() * 6000;
     idleTimer = setTimeout(() => {
-      if (!enabled || paused || Date.now() < lockedUntil) {
-        scheduleIdle();
-        return;
-      }
-      if (currentAction === "sleep") {
-        play(Math.random() < 0.35 ? "breathe" : "sleep", { fromIdle: true });
-        return;
-      }
-      if (currentAction === "drag") {
-        scheduleIdle();
-        return;
-      }
-      const pick = IDLE_POOL[Math.floor(Math.random() * IDLE_POOL.length)];
-      play(pick, { fromIdle: true });
+      void tickIdle();
     }, wait);
   }
 
@@ -325,7 +407,11 @@ export function createMotionController() {
     }, frameIntervalMs);
   }
 
-  function setPaused(value) {
+  /**
+   * @param {boolean} value
+   * @param {{ skipResume?: boolean, resumeAction?: string }} [opts]
+   */
+  function setPaused(value, opts = {}) {
     const next = Boolean(value);
     if (next === paused) return;
     paused = next;
@@ -333,8 +419,14 @@ export function createMotionController() {
       savedBeforePause = currentAction === "drag" ? savedBeforePause : currentAction;
       clearIdleTimer();
       play("drag", { force: true });
+    } else if (opts.skipResume) {
+      // Caller owns the next play (drag-end settle). Do not scheduleIdle here —
+      // play() will re-arm the idle pool.
+      clearIdleTimer();
     } else {
-      const resume = savedBeforePause === "drag" ? "idle" : savedBeforePause || "idle";
+      const resume =
+        opts.resumeAction ||
+        (savedBeforePause === "drag" ? "idle" : savedBeforePause || "idle");
       play(resume, { force: true, fromIdle: true });
       scheduleIdle();
     }
@@ -480,6 +572,11 @@ export function createMotionController() {
     if (action === "sleep") setContext("sleep");
     else setContext("");
     play(action, { force: true, ...extra });
+    // After scene hold ends, suppress sit-heavy zone idle for a short window.
+    const def = ACTIONS[action] || ACTIONS.idle;
+    const hold = extra.holdMs ?? def.duration;
+    const holdMs = hold && hold > 0 ? Number(hold) : 1200;
+    postSceneUntil = Date.now() + holdMs + ZONE_CONFIG.POST_SCENE_IDLE_COOLDOWN_MS;
   }
 
   function getAction() {

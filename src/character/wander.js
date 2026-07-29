@@ -21,18 +21,42 @@ const WALK_MS_MAX = 5200;
 const EDGE_MARGIN_PX = 18;
 
 /**
+ * Actions that may auto-roam (zone may favor look/alert — must not hard-block roam).
+ * sit / sleep / talk / etc. still block.
+ */
+const CALM_FOR_ROAM = new Set([
+  "idle",
+  "breathe",
+  "sway",
+  "look",
+  "calm",
+  "soft",
+  "smile",
+  "alert",
+  "nod",
+]);
+
+/**
  * @typedef {{
  *   motion: {
  *     play: (id: string, opts?: object) => void,
  *     getAction: () => string,
  *     setFacing: (dir: "left"|"right"|number) => void,
+ *     setContext?: (ctx: string) => void,
  *     isPaused?: () => boolean,
  *     isEnabled?: () => boolean,
  *     lockFor?: (ms: number) => void,
+ *     getFacing?: () => string,
  *   },
  *   moveBy: (delta: { dx: number, dy: number }) => void,
  *   getBounds?: () => Promise<{ x: number, y: number, width: number, height: number } | null>,
  *   getWorkArea?: () => Promise<{ x: number, y: number, width: number, height: number } | null>,
+ *   getRoamBias?: (opts?: { ensureFresh?: boolean }) => Promise<{
+ *     roamChanceMul?: number,
+ *     walkVsHop?: number,
+ *     preferDir?: number|null,
+ *     zoneId?: string|null,
+ *   } | null>,
  *   isBlocked?: () => boolean,
  *   onRoamStart?: (kind: "walk" | "hop") => void,
  * }} WanderDeps
@@ -47,9 +71,14 @@ export function createWanderController(deps) {
     moveBy,
     getBounds,
     getWorkArea,
+    getRoamBias,
     isBlocked = () => false,
     onRoamStart,
   } = deps;
+
+  function isCalmAction(act) {
+    return CALM_FOR_ROAM.has(act);
+  }
 
   let enabled = true;
   let roamTimer = null;
@@ -278,7 +307,8 @@ export function createWanderController(deps) {
 
   /**
    * Plan a destination-ish walk toward a random point in the work area.
-   * @param {{ force?: boolean }} [opts] force=true: user menu — ignore auto-roam/sleep gates
+   * @param {{ force?: boolean, preferDir?: number|null, zoneId?: string|null }} [opts]
+   *   force=true: user menu — ignore auto-roam/sleep gates
    */
   async function planWalk(opts = {}) {
     const force = Boolean(opts.force);
@@ -289,8 +319,19 @@ export function createWanderController(deps) {
     }
 
     const facing = motion.getFacing?.();
-    const preferredDir = facing === "left" ? -1 : 1;
+    let preferredDir =
+      opts.preferDir === 1 || opts.preferDir === -1
+        ? opts.preferDir
+        : facing === "left"
+          ? -1
+          : 1;
     let duration = WALK_MS_MIN + Math.random() * (WALK_MS_MAX - WALK_MS_MIN);
+
+    // Corner walks are slightly shorter (before room clamp).
+    const zoneId = opts.zoneId || null;
+    if (zoneId && String(zoneId).startsWith("corner")) {
+      duration *= 0.8;
+    }
 
     const plan = await resolveWalkPlan(preferredDir, duration);
     // Re-check after await: user may have started a drag.
@@ -373,20 +414,53 @@ export function createWanderController(deps) {
     roamTimer = null;
     if (!enabled) return;
 
-    if (canAutoRoam() && Math.random() < ROAM_CHANCE) {
+    if (!canAutoRoam()) {
+      scheduleRoam();
+      return;
+    }
+
+    let bias = {
+      roamChanceMul: 1,
+      walkVsHop: WALK_VS_HOP,
+      preferDir: null,
+      zoneId: null,
+    };
+    if (typeof getRoamBias === "function") {
+      try {
+        const b = await getRoamBias({ ensureFresh: true });
+        if (b) {
+          bias = {
+            roamChanceMul: Number(b.roamChanceMul) > 0 ? Number(b.roamChanceMul) : 1,
+            walkVsHop:
+              Number(b.walkVsHop) > 0 && Number(b.walkVsHop) <= 1
+                ? Number(b.walkVsHop)
+                : WALK_VS_HOP,
+            preferDir: b.preferDir === 1 || b.preferDir === -1 ? b.preferDir : null,
+            zoneId: b.zoneId || null,
+          };
+        }
+      } catch {
+        /* keep defaults */
+      }
+    }
+
+    // Post-await guards
+    if (!canAutoRoam() || isHardBlocked()) {
+      scheduleRoam();
+      return;
+    }
+
+    const chance = ROAM_CHANCE * bias.roamChanceMul;
+    if (Math.random() < chance) {
       const act = motion.getAction?.();
       // Don't interrupt talk / celebrate / sit mid-clip — only roam from calm states.
-      if (
-        act === "idle" ||
-        act === "breathe" ||
-        act === "sway" ||
-        act === "look" ||
-        act === "calm" ||
-        act === "soft" ||
-        act === "smile"
-      ) {
-        if (Math.random() < WALK_VS_HOP) {
-          await planWalk({ force: false });
+      if (isCalmAction(act)) {
+        if (Math.random() < bias.walkVsHop) {
+          await planWalk({
+            force: false,
+            preferDir: bias.preferDir,
+            zoneId: bias.zoneId,
+          });
         } else {
           planHop({ force: false });
         }

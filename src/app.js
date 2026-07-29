@@ -2,10 +2,13 @@ import { CHARACTER, getAffinityRank } from "./character/profile.js";
 import { speak, timeBucket } from "./character/dialogue.js";
 import { createMotionController } from "./character/motion.js";
 import { createWanderController } from "./character/wander.js";
+import {
+  createZoneTracker,
+  isZonePosesEnabled,
+} from "./character/screen-zone.js";
 import { loadState, saveState, gainAffinity } from "./state.js";
 
 const app = document.querySelector("#app");
-const motion = createMotionController();
 
 const DRAG_THRESHOLD_PX = 4;
 const CLICK_SUPPRESS_MS = 500;
@@ -17,6 +20,29 @@ let currentScene = state.lastScene || "boot";
 
 let autoWanderEnabled = true;
 let menuOpen = false;
+/** Last applied OS mouse-ignore state (true = click-through empty pixels). */
+let mouseIgnoreActive = null;
+/** Last logical window footprint: compact body vs speak/menu chrome. */
+let windowChromeMode = "compact";
+
+const zoneTracker = createZoneTracker({
+  getBounds: () => window.petApi?.bounds?.() ?? Promise.resolve(null),
+  getWorkArea: () => window.petApi?.workArea?.() ?? Promise.resolve(null),
+  enabled: () => isZonePosesEnabled(),
+});
+
+const motion = createMotionController({
+  getZoneSnapshot: (opts) => zoneTracker.getSnapshot(opts),
+  getLastZoneId: () => zoneTracker.getZoneId(),
+  onZoneSit: (_zoneId) => {
+    // Quiet by default; occasional place-aware line only.
+    if (bubbleOpen || Math.random() >= 0.15) return;
+    const line = speak("zoneSit", { affinity: state.affinity });
+    currentLine = line.text;
+    openBubble(3500);
+    updateBubbleDom();
+  },
+});
 
 /**
  * Stage focus: keep dock / panel chrome off.
@@ -56,6 +82,7 @@ const wander = createWanderController({
   moveBy: (delta) => window.petApi?.moveBy?.(delta),
   getBounds: () => window.petApi?.bounds?.() ?? Promise.resolve(null),
   getWorkArea: () => window.petApi?.workArea?.() ?? Promise.resolve(null),
+  getRoamBias: (opts) => zoneTracker.getRoamBias(opts),
   // Only real drag sessions block locomotion — not post-drag click suppress.
   isBlocked: () => isDragging || pointerArmed,
   onRoamStart: (_kind) => {
@@ -67,8 +94,125 @@ const wander = createWanderController({
   },
 });
 
+/**
+ * After a real window drag: unpause without resuming pre-drag clip,
+ * then play a single settle or idle (no double force-play).
+ * @param {{ deferUi?: boolean }} [opts] deferUi=true when a post-drag UI callback will run
+ */
+async function finishDragWithZone(opts = {}) {
+  motion.setPaused?.(false, { skipResume: true });
+  wander.resume();
+
+  // If deferred UI or menu owns the next beat, only restore idle once.
+  if (opts.deferUi || menuOpen) {
+    motion.play("idle", { force: true, fromIdle: true });
+    return;
+  }
+
+  if (!isZonePosesEnabled()) {
+    motion.play("idle", { force: true, fromIdle: true });
+    return;
+  }
+
+  let snap = null;
+  try {
+    snap = await zoneTracker.refresh({ force: true });
+  } catch {
+    snap = null;
+  }
+
+  // Post-await: user may have grabbed her again.
+  if (isDragging || pointerArmed || motion.isPaused?.()) return;
+
+  if (snap?.zoneId) {
+    const actor = document.querySelector("#pet-actor");
+    if (actor) actor.dataset.zone = snap.zoneId;
+  }
+
+  if (snap && Math.random() < 0.45) {
+    const z = snap.zoneId || "";
+    if ((z.startsWith("corner-b") || z === "edge-bottom") && Math.random() < 0.35) {
+      motion.play("sit", { force: true, holdMs: 3500 });
+      // Rare quiet place-aware line
+      if (Math.random() < 0.15 && !bubbleOpen) {
+        const line = speak("zoneSit", { affinity: state.affinity });
+        currentLine = line.text;
+        openBubble(3500);
+        updateBubbleDom();
+      }
+      return;
+    }
+    if (z.startsWith("edge") || z.startsWith("corner")) {
+      if (snap.facingHint) motion.setFacing(snap.facingHint);
+      motion.play(Math.random() < 0.5 ? "look" : "soft", { force: true });
+      return;
+    }
+  }
+
+  motion.play("idle", { force: true, fromIdle: true });
+}
+
 function setDraggingLock(on) {
   window.petApi?.setDragging?.(Boolean(on));
+  // Dragging always needs a solid hit target under the cursor.
+  if (on) applyMouseIgnore(false);
+  else refreshMouseIgnore();
+}
+
+/**
+ * OS-level click-through: transparent chrome must not steal desktop clicks.
+ * @param {boolean} ignore
+ */
+function applyMouseIgnore(ignore) {
+  const next = Boolean(ignore);
+  if (mouseIgnoreActive === next) return;
+  mouseIgnoreActive = next;
+  window.petApi?.setIgnoreMouseEvents?.(next, { forward: true });
+}
+
+/**
+ * True when the element (or an ancestor) is a real interactive surface.
+ * @param {Element | null} el
+ */
+function isInteractiveTarget(el) {
+  if (!el || !(el instanceof Element)) return false;
+  if (el.closest("#pet-hit")) return true;
+  if (el.closest("#pet-menu") && !el.closest("#pet-menu.closed")) return true;
+  if (bubbleOpen && el.closest("#bubble") && !el.closest("#bubble.closed")) return true;
+  return false;
+}
+
+/**
+ * Recompute mouse ignore from pointer position / UI state.
+ * @param {number} [clientX]
+ * @param {number} [clientY]
+ */
+function refreshMouseIgnore(clientX, clientY) {
+  if (isDragging || pointerArmed || menuOpen) {
+    applyMouseIgnore(false);
+    return;
+  }
+  if (clientX == null || clientY == null) {
+    // No sample point (e.g. after menu close) — default to passthrough.
+    applyMouseIgnore(true);
+    return;
+  }
+  const el = document.elementFromPoint(clientX, clientY);
+  applyMouseIgnore(!isInteractiveTarget(el));
+}
+
+/**
+ * Grow the OS window when bubble/menu need room; shrink back to body-only.
+ * Bottom-center anchor is preserved by main-process setMode.
+ * Skips while dragging (main process locks size); call again after release.
+ */
+function syncWindowChrome() {
+  if (isDragging || pointerArmed) return;
+  const needRoom = Boolean(bubbleOpen || menuOpen);
+  const next = needRoom ? "speak" : "compact";
+  if (next === windowChromeMode) return;
+  windowChromeMode = next;
+  window.petApi?.setMode?.(next);
 }
 
 // ---------- persistence helpers ----------
@@ -110,7 +254,13 @@ function setMode(mode, { repaint = true } = {}) {
   app.classList.remove("mode-compact", "mode-dock", "mode-panel");
   app.classList.add(`mode-${mode}`);
   persist();
-  window.petApi?.setMode?.(mode);
+  if (UI_MINIMAL) {
+    // Footprint is driven by bubble/menu (compact vs speak), not dock/panel.
+    windowChromeMode = "";
+    syncWindowChrome();
+  } else {
+    window.petApi?.setMode?.(mode);
+  }
   if (repaint) paint();
   return true;
 }
@@ -125,9 +275,11 @@ function ensureInteractiveMode() {
 function openBubble(ms = 8000) {
   if (!SHOW_BUBBLE) {
     bubbleOpen = false;
+    syncWindowChrome();
     return;
   }
   bubbleOpen = true;
+  syncWindowChrome();
   if (bubbleHideTimer) clearTimeout(bubbleHideTimer);
   bubbleHideTimer = setTimeout(() => {
     bubbleOpen = false;
@@ -142,6 +294,7 @@ function updateBubbleDom() {
   if (line) line.innerHTML = escapeHtml(currentLine);
   if (rankEl) rankEl.textContent = getAffinityRank(state.affinity).title;
   if (bubble) bubble.classList.toggle("closed", !bubbleOpen);
+  syncWindowChrome();
 }
 
 function setArtStyle(_art) {
@@ -245,18 +398,24 @@ function toggleMenu(show, clientX, clientY) {
   const menu = document.querySelector("#pet-menu");
   if (!menu) return;
   menuOpen = Boolean(show);
+  // Expand window first so menu has room, then place (bottom anchor).
+  syncWindowChrome();
+  applyMouseIgnore(false);
   if (menuOpen) {
     menu.classList.remove("closed");
     if (clientX != null && clientY != null) {
       // First paint at the click so layout can measure real size, then clamp.
       menu.style.left = `${Math.round(clientX)}px`;
       menu.style.top = `${Math.round(clientY)}px`;
-      // Force layout after un-hiding (display:none → block).
-      void menu.offsetWidth;
-      placeMenuInViewport(menu, clientX, clientY);
+      // Force layout after un-hiding (display:none → block) and after resize.
+      requestAnimationFrame(() => {
+        void menu.offsetWidth;
+        placeMenuInViewport(menu, clientX, clientY);
+      });
     }
   } else {
     menu.classList.add("closed");
+    refreshMouseIgnore(clientX, clientY);
   }
 }
 
@@ -304,13 +463,25 @@ async function handleMenuAction(action) {
       if (ok) spawnParticles(70, 90, "✨");
       break;
     }
-    case "sit":
+    case "sit": {
+      // Existing order: lock → soft talk affinity → force sit (talk may flash under sit).
       motion.lockFor(6000);
-      say("talk", { affinityGain: 1 });
-      currentLine = "稍微坐下来休息一会儿吧。";
+      const before = state.affinity;
+      state = gainAffinity(state, 1);
+      delete state._affinityGained;
+      const line = speak("menuSit", { affinity: state.affinity });
+      currentScene = "talk";
+      currentLine = line.text;
+      if (state.affinity > before && state.affinity % 20 === 0) {
+        const extra = speak("affinityUp", { affinity: state.affinity });
+        currentLine = `${currentLine}\n${extra.text}`;
+      }
       openBubble(5000);
+      updateBubbleDom();
+      persist();
       motion.play("sit", { force: true, holdMs: 6000 });
       break;
+    }
     case "toggle-wander":
       autoWanderEnabled = !autoWanderEnabled;
       if (autoWanderEnabled) {
@@ -454,24 +625,42 @@ function bind() {
       pointerArmed = false;
       pet.classList.remove("is-dragging");
       setDraggingLock(false);
-      motion.setPaused?.(false);
-      wander.resume();
 
-      if (!hadPointer) return false;
+      if (!hadPointer) {
+        motion.setPaused?.(false);
+        wander.resume();
+        return false;
+      }
 
       if (dragged) {
         suppressClickUntil = Date.now() + CLICK_SUPPRESS_MS;
         const deferred = pendingAfterDrag;
         pendingAfterDrag = null;
         if (deferred) {
-          requestAnimationFrame(() => {
-            if (!isDragging && !pointerArmed) deferred();
+          void finishDragWithZone({ deferUi: true }).then(() => {
+            requestAnimationFrame(() => {
+              if (!isDragging && !pointerArmed) {
+                deferred();
+                syncWindowChrome();
+                refreshMouseIgnore();
+              }
+            });
+          });
+        } else {
+          void finishDragWithZone({ deferUi: false }).then(() => {
+            syncWindowChrome();
+            refreshMouseIgnore();
           });
         }
         return true;
       }
 
+      // Click (no real drag): default unpause/resume path (usually never paused).
+      motion.setPaused?.(false);
+      wander.resume();
       pendingAfterDrag = null;
+      syncWindowChrome();
+      refreshMouseIgnore();
       return false;
     };
 
@@ -585,11 +774,27 @@ function bind() {
   });
 
   paintStars();
+  refreshMouseIgnore();
 }
+
+/** Forwarded mousemove while click-through is active — re-hit-test interactive surfaces. */
+document.addEventListener(
+  "pointermove",
+  (e) => {
+    if (isDragging || pointerArmed) return;
+    refreshMouseIgnore(e.clientX, e.clientY);
+  },
+  { passive: true, capture: true },
+);
+
+document.addEventListener("pointerleave", () => {
+  if (isDragging || pointerArmed || menuOpen) return;
+  applyMouseIgnore(true);
+});
 
 document.addEventListener("click", (e) => {
   if (menuOpen && !e.target.closest("#pet-menu")) {
-    toggleMenu(false);
+    toggleMenu(false, e.clientX, e.clientY);
   }
 });
 
@@ -617,13 +822,21 @@ function boot() {
   state.artStyle = "body";
   openBubble(10000);
   persist();
+  zoneTracker.start();
   paint();
   motion.playScene(currentScene);
   wander.start();
-  window.petApi?.setMode?.("compact");
+  // openBubble already requested speak size; force-assert after first paint.
+  windowChromeMode = "";
+  syncWindowChrome();
+  applyMouseIgnore(true);
 
   window.petApi?.onSetMode?.((mode) => {
     if (!mode) return;
+    if (mode === "speak" || mode === "compact") {
+      windowChromeMode = mode;
+      return;
+    }
     if (UI_MINIMAL) {
       setMode("compact", { repaint: false });
       return;

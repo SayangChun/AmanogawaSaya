@@ -6,12 +6,16 @@
   flex-direction: column;
   align-items: center;
   justify-content: flex-end;
-  padding: 6px 8px 8px;
+  padding: 4px 4px 2px;
   pointer-events: none;
   overflow: hidden;
 }
 
-.shell > * {
+/* Opt-in only: empty stage / glow / stars must not own a hit rectangle */
+.shell .pet-hit,
+.shell .bubble:not(.closed),
+.shell .dock,
+.shell .panel {
   pointer-events: auto;
 }
 
@@ -80,15 +84,17 @@
 }
 
 /* ===== Character stage — full-body VPet ===== */
+/* Stage itself never captures hits — only .pet-hit / bubble / menu do. */
 .stage {
   position: relative;
   width: 100%;
   flex: 1;
-  min-height: 140px;
+  min-height: 0;
   display: flex;
   align-items: flex-end;
   justify-content: center;
   z-index: 2;
+  pointer-events: none;
 }
 
 .stage-glow {
@@ -105,11 +111,11 @@
   animation: glow-pulse 4.5s ease-in-out infinite;
 }
 
-/* Hit area sized for full-body sprite */
+/* Hit area sized tightly around the full-body sprite (object-fit contain) */
 .pet-hit {
   position: relative;
-  width: 132px;
-  height: 188px;
+  width: 120px;
+  height: 170px;
   border: 0;
   padding: 0;
   background: transparent;
@@ -118,12 +124,13 @@
   touch-action: none;
   flex-shrink: 0;
   z-index: 2;
+  pointer-events: auto;
 }
 
 .mode-dock .pet-hit,
 .mode-panel .pet-hit {
-  width: 148px;
-  height: 210px;
+  width: 132px;
+  height: 186px;
 }
 
 .pet-hit:active,
@@ -176,6 +183,13 @@
   pointer-events: none;
   z-index: 0;
   transition: transform 0.25s ease, opacity 0.25s ease;
+}
+
+/* Soft visual cue for edge/corner zones — keep translateX(-50%); do not override sit/drag */
+.pet-actor[data-zone^="edge"]:not(.act-sit):not(.act-drag) .pet-shadow,
+.pet-actor[data-zone^="corner"]:not(.act-sit):not(.act-drag) .pet-shadow {
+  transform: translateX(-50%) scaleX(0.92);
+  opacity: 0.85;
 }
 
 .pet-body {
@@ -378,34 +392,39 @@
 
 /* Compact floating window: bubble above full-body sprite */
 .shell-with-bubble {
-  padding: 6px 8px 4px;
+  padding: 4px 6px 2px;
   justify-content: flex-end;
-  gap: 2px;
+  gap: 0;
 }
 
 .shell-with-bubble .bubble {
-  width: min(100%, 200px);
-  margin-bottom: 2px;
-  padding: 8px 10px 9px;
-  font-size: 0.82rem;
+  width: min(100%, 184px);
+  margin-bottom: 0;
+  padding: 6px 9px 7px;
+  font-size: 0.78rem;
   pointer-events: none;
   -webkit-app-region: no-drag;
 }
 
 .shell-with-bubble .bubble-text {
-  font-size: 0.8rem;
-  line-height: 1.55;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.shell-with-bubble .bubble-meta {
+  margin-bottom: 4px;
 }
 
 .shell-with-bubble .stage {
   min-height: 0;
-  flex: 1;
-  width: 100%;
+  flex: 0 0 auto;
+  width: auto;
+  pointer-events: none;
 }
 
 .shell-with-bubble .pet-hit {
-  width: 128px;
-  height: 182px;
+  width: 120px;
+  height: 170px;
 }
 
 .dock-btn {
@@ -650,10 +669,12 @@
   gap: 2px;
   animation: menu-pop 0.18s cubic-bezier(0.18, 0.89, 0.32, 1.28);
   transform-origin: top left;
+  pointer-events: auto;
 }
 
 .pet-menu.closed {
   display: none !important;
+  pointer-events: none;
 }
 
 .pet-menu-item {

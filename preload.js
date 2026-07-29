@@ -15,6 +15,16 @@ contextBridge.exposeInMainWorld("petApi", {
   bounds: () => ipcRenderer.invoke("pet:bounds"),
   workArea: () => ipcRenderer.invoke("pet:work-area"),
   setMode: (mode) => ipcRenderer.invoke("pet:set-mode", mode),
+  /**
+   * Toggle OS-level mouse ignore so transparent pixels click through.
+   * @param {boolean} ignore
+   * @param {{ forward?: boolean }} [options] forward=true keeps mousemove for hit-test
+   */
+  setIgnoreMouseEvents: (ignore, options) => {
+    ipcRenderer.send("pet:set-ignore-mouse", Boolean(ignore), {
+      forward: options?.forward !== false,
+    });
+  },
   notify: (payload) => ipcRenderer.invoke("pet:notify", payload),
   getPath: (name) => ipcRenderer.invoke("pet:get-path", name),
   onSetMode: (handler) => {

@@ -25,12 +25,19 @@ let currentMode = "compact";
 /** When true, refuse setMode resizes (prevents drag → window grow) */
 let windowDragging = false;
 
-/** Window modes: compact full-body VPet + bubble / interactive dock / full panel */
+/**
+ * Window modes — sized tightly around the full-body sprite so the
+ * transparent chrome does not occupy a large desktop rectangle.
+ * `speak` grows upward for the dialogue bubble (bottom anchor fixed).
+ * Mouse passthrough (renderer) lets empty pixels click through to the desktop.
+ */
 const WINDOW_MODES = {
-  // Taller compact: room for speech bubble above full-body sprite
-  compact: { width: 220, height: 320 },
-  dock: { width: 300, height: 420 },
-  panel: { width: 360, height: 560 },
+  // Body only: pet-hit ~120×170 + minimal padding
+  compact: { width: 136, height: 196 },
+  // Bubble above body (short 1–2 line lines)
+  speak: { width: 196, height: 272 },
+  dock: { width: 280, height: 400 },
+  panel: { width: 340, height: 520 },
 };
 
 function modeSize(mode = currentMode) {
@@ -169,9 +176,13 @@ function clampToWorkArea(x, y, width, height) {
  * Blocked while the user is dragging the pet (window must not grow mid-drag).
  */
 function setMode(mode, { animate = false, force = false } = {}) {
-  // Stage focus: only compact window — no dock / panel chrome.
+  // Stage focus: only compact / speak chrome — no dock / panel.
   if (mode === "dock" || mode === "panel") {
     mode = "compact";
+  }
+  // Menu needs roughly the same footprint as the speech bubble layout.
+  if (mode === "menu") {
+    mode = "speak";
   }
   if (!mainWindow || !WINDOW_MODES[mode]) return null;
 
@@ -423,6 +434,22 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle("pet:set-mode", (_e, mode) => setMode(mode));
+
+  /**
+   * Click-through for transparent desktop-pet chrome.
+   * When ignore=true + forward, empty pixels pass to apps below while the
+   * renderer still receives mousemove for hover hit-testing.
+   */
+  ipcMain.on("pet:set-ignore-mouse", (_e, ignore, options) => {
+    if (!mainWindow) return;
+    if (ignore) {
+      mainWindow.setIgnoreMouseEvents(true, {
+        forward: options?.forward !== false,
+      });
+    } else {
+      mainWindow.setIgnoreMouseEvents(false);
+    }
+  });
 
   ipcMain.handle("pet:notify", (_e, payload) => {
     if (!Notification.isSupported()) return false;
