@@ -269,6 +269,98 @@
       "loop": true,
       "duration": null,
       "holdLast": false
+    },
+    "think": {
+      "frames": [
+        "./assets/animations/calm/00.png",
+        "./assets/animations/calm/01.png",
+        "./assets/animations/look/00.png",
+        "./assets/animations/look/01.png",
+        "./assets/animations/look/02.png",
+        "./assets/animations/calm/01.png",
+        "./assets/animations/calm/02.png"
+      ],
+      "fps": 2,
+      "loop": false,
+      "duration": 4200,
+      "holdLast": false
+    },
+    "peek": {
+      "frames": [
+        "./assets/animations/look/00.png",
+        "./assets/animations/look/01.png",
+        "./assets/animations/alert/01.png",
+        "./assets/animations/alert/02.png",
+        "./assets/animations/look/01.png",
+        "./assets/animations/look/02.png",
+        "./assets/animations/soft/01.png"
+      ],
+      "fps": 2.5,
+      "loop": false,
+      "duration": 3600,
+      "holdLast": false
+    },
+    "yawn": {
+      "frames": [
+        "./assets/animations/soft/00.png",
+        "./assets/animations/stretch/00.png",
+        "./assets/animations/stretch/01.png",
+        "./assets/animations/stretch/02.png",
+        "./assets/animations/stretch/02.png",
+        "./assets/animations/stretch/03.png",
+        "./assets/animations/breathe/02.png",
+        "./assets/animations/soft/01.png"
+      ],
+      "fps": 2,
+      "loop": false,
+      "duration": 4000,
+      "holdLast": false
+    },
+    "giggle": {
+      "frames": [
+        "./assets/animations/smile/00.png",
+        "./assets/animations/smile/01.png",
+        "./assets/animations/smile/02.png",
+        "./assets/animations/smile/03.png",
+        "./assets/animations/smile/01.png",
+        "./assets/animations/smile/02.png",
+        "./assets/animations/bounce/01.png",
+        "./assets/animations/smile/03.png"
+      ],
+      "fps": 3.5,
+      "loop": false,
+      "duration": 2800,
+      "holdLast": false
+    },
+    "greet": {
+      "frames": [
+        "./assets/animations/wave/00.png",
+        "./assets/animations/wave/01.png",
+        "./assets/animations/wave/02.png",
+        "./assets/animations/wave/03.png",
+        "./assets/animations/wave/04.png",
+        "./assets/animations/smile/01.png",
+        "./assets/animations/smile/02.png",
+        "./assets/animations/soft/01.png"
+      ],
+      "fps": 3,
+      "loop": false,
+      "duration": 3200,
+      "holdLast": false
+    },
+    "rest": {
+      "frames": [
+        "./assets/animations/calm/00.png",
+        "./assets/animations/soft/01.png",
+        "./assets/animations/sit/00.png",
+        "./assets/animations/sit/01.png",
+        "./assets/animations/sit/02.png",
+        "./assets/animations/sit/03.png"
+      ],
+      "fps": 2.2,
+      "loop": false,
+      "duration": 5000,
+      "holdLast": true
     }
   }
 }

@@ -14,7 +14,11 @@ contextBridge.exposeInMainWorld("petApi", {
   },
   bounds: () => ipcRenderer.invoke("pet:bounds"),
   workArea: () => ipcRenderer.invoke("pet:work-area"),
-  setMode: (mode) => ipcRenderer.invoke("pet:set-mode", mode),
+  /**
+   * @param {string} mode
+   * @param {{ dockPlacement?: "above" | "below", animate?: boolean, force?: boolean }} [options]
+   */
+  setMode: (mode, options) => ipcRenderer.invoke("pet:set-mode", mode, options),
   /**
    * Toggle OS-level mouse ignore so transparent pixels click through.
    * @param {boolean} ignore

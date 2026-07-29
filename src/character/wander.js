@@ -32,6 +32,10 @@ const CALM_FOR_ROAM = new Set([
   "smile",
   "alert",
   "nod",
+  "peek",
+  "think",
+  "giggle",
+  "yawn",
 ]);
 
 /**

@@ -29,8 +29,10 @@ npm start
 - 待机呼吸、左右张望、原地小跑
 - 坐下、伸懒腰、挥手打招呼
 - 点击弹跳、害羞、庆祝、被拖动拎起
+- 组合动作：沉思 `think`、探头 `peek`、打哈欠 `yawn`、轻笑 `giggle`、问候 `greet`、歇息 `rest`
+- **行为多动作**：`src/character/behaviors.js` 里一个行为可配置多条加权变体，每条是动作链（如夸奖 → 害羞→微笑）；链内顺序播放、中间不回 idle
 - **屏幕分区姿势**：贴边/角落时更安静张望，开阔区 freer；默认右下角有启动宽限期防过静
-- 固定 **冬制服** 形象；动作由 `assets/animations/<动作>/` 下 PNG 帧驱动
+- 固定 **冬制服** 形象；动作由 `assets/animations/<动作>/` 下 PNG 帧驱动（部分组合动作复用现有帧）
 
 关闭分区姿势（恢复旧 idle）：在渲染进程 DevTools 执行 `localStorage.setItem('saya.zonePoses','0')` 后刷新。
 

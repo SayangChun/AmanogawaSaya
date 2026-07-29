@@ -12,6 +12,11 @@ const app = document.querySelector("#app");
 
 const DRAG_THRESHOLD_PX = 4;
 const CLICK_SUPPRESS_MS = 500;
+/**
+ * After interacting with Saya, keep the window hit-test solid for a short
+ * window so rapid multi-clicks never fall through to the desktop mid-burst.
+ */
+const STICKY_HIT_MS = 320;
 
 /** @type {ReturnType<typeof loadState>} */
 let state = loadState();
@@ -23,10 +28,31 @@ let autoWanderEnabled = true;
 let dockOpen = false;
 /** Secondary dock submenu: affinity / stats (under 星轨). */
 let dockStatsOpen = false;
+/**
+ * Where the dock sits relative to Saya: below feet (default) or above head.
+ * Chosen from free work-area space so the window can grow without shoving her.
+ * @type {"above" | "below"}
+ */
+let dockPlacement = "below";
 /** Last applied OS mouse-ignore state (true = click-through empty pixels). */
 let mouseIgnoreActive = null;
+/**
+ * Last known pointer position in window client coords.
+ * Used when refreshMouseIgnore() is called without a sample point (e.g. after
+ * pointerup) so we do not default to click-through while still over Saya.
+ * @type {number | null}
+ */
+let lastPointerClientX = null;
+/** @type {number | null} */
+let lastPointerClientY = null;
+/** Keep mouse capture solid until this timestamp (rapid pet clicks). */
+let stickyHitUntil = 0;
+/** @type {ReturnType<typeof setTimeout> | null} */
+let stickyHitTimer = null;
 /** Last logical window footprint: compact | speak | dock | dockStats. */
 let windowChromeMode = "compact";
+/** Placement last sent with windowChromeMode (skip redundant setMode). */
+let lastChromePlacement = "";
 
 const zoneTracker = createZoneTracker({
   getBounds: () => window.petApi?.bounds?.() ?? Promise.resolve(null),
@@ -135,7 +161,7 @@ async function finishDragWithZone(opts = {}) {
   if (snap && Math.random() < 0.45) {
     const z = snap.zoneId || "";
     if ((z.startsWith("corner-b") || z === "edge-bottom") && Math.random() < 0.35) {
-      motion.play("sit", { force: true, holdMs: 3500 });
+      motion.playBehavior("settleCorner", { force: true, holdMs: 3500 });
       // Rare quiet place-aware line
       if (Math.random() < 0.15 && !bubbleOpen) {
         const line = speak("zoneSit", { affinity: state.affinity });
@@ -147,12 +173,17 @@ async function finishDragWithZone(opts = {}) {
     }
     if (z.startsWith("edge") || z.startsWith("corner")) {
       if (snap.facingHint) motion.setFacing(snap.facingHint);
-      motion.play(Math.random() < 0.5 ? "look" : "soft", { force: true });
+      motion.playBehavior("settleEdge", { force: true });
       return;
     }
   }
 
-  motion.play("idle", { force: true, fromIdle: true });
+  // Open area: soft multi-action settle or plain idle
+  if (Math.random() < 0.4) {
+    motion.playBehavior("settle", { force: true });
+  } else {
+    motion.play("idle", { force: true, fromIdle: true });
+  }
 }
 
 function setDraggingLock(on) {
@@ -160,6 +191,35 @@ function setDraggingLock(on) {
   // Dragging always needs a solid hit target under the cursor.
   if (on) applyMouseIgnore(false);
   else refreshMouseIgnore();
+}
+
+/**
+ * Remember last pointer client position for hit-testing after pointerup.
+ * @param {number} [x]
+ * @param {number} [y]
+ */
+function notePointerClient(x, y) {
+  if (typeof x === "number" && Number.isFinite(x)) lastPointerClientX = x;
+  if (typeof y === "number" && Number.isFinite(y)) lastPointerClientY = y;
+}
+
+/**
+ * Keep the window solid for a short period after pet interaction so continuous
+ * clicks cannot race past setIgnoreMouseEvents into the desktop below.
+ * When the sticky window ends, re-run hit-test (or passthrough if the cursor left).
+ * @param {number} [ms]
+ */
+function armStickyHit(ms = STICKY_HIT_MS) {
+  stickyHitUntil = Math.max(stickyHitUntil, Date.now() + ms);
+  if (stickyHitTimer) clearTimeout(stickyHitTimer);
+  const remain = Math.max(0, stickyHitUntil - Date.now());
+  stickyHitTimer = setTimeout(() => {
+    stickyHitTimer = null;
+    if (isDragging || pointerArmed || dockOpen) return;
+    // If sticky was extended again, wait for the later timer.
+    if (Date.now() < stickyHitUntil) return;
+    refreshMouseIgnore(lastPointerClientX, lastPointerClientY);
+  }, remain + 1);
 }
 
 /**
@@ -187,16 +247,25 @@ function isInteractiveTarget(el) {
 
 /**
  * Recompute mouse ignore from pointer position / UI state.
+ * Without explicit coords, reuses the last known pointer sample instead of
+ * blindly enabling passthrough (that was dropping rapid pet clicks through).
  * @param {number} [clientX]
  * @param {number} [clientY]
  */
 function refreshMouseIgnore(clientX, clientY) {
-  if (isDragging || pointerArmed || dockOpen) {
+  if (clientX != null && clientY != null) {
+    notePointerClient(clientX, clientY);
+  } else {
+    clientX = lastPointerClientX;
+    clientY = lastPointerClientY;
+  }
+
+  if (isDragging || pointerArmed || dockOpen || Date.now() < stickyHitUntil) {
     applyMouseIgnore(false);
     return;
   }
   if (clientX == null || clientY == null) {
-    // No sample point (e.g. after dock close) — default to passthrough.
+    // No sample point yet (boot / left window) — allow desktop passthrough.
     applyMouseIgnore(true);
     return;
   }
@@ -205,11 +274,93 @@ function refreshMouseIgnore(clientX, clientY) {
 }
 
 /**
- * Grow the OS window when bubble / bottom dock need room; shrink back to body-only.
- * Bottom-center anchor is preserved by main-process setMode.
- * Skips while dragging (main process locks size); call again after release.
+ * Pick dock side from free work-area space around the current window.
+ * Prefer below; use above when the bar would not fit under the feet.
+ * @returns {Promise<"above" | "below">}
  */
-function syncWindowChrome() {
+async function chooseDockPlacement() {
+  try {
+    const [bounds, work] = await Promise.all([
+      window.petApi?.bounds?.() ?? Promise.resolve(null),
+      window.petApi?.workArea?.() ?? Promise.resolve(null),
+    ]);
+    if (!bounds || !work) return "below";
+
+    // Extra height to grow when opening dock chrome (compact → dock / dockStats).
+    const need = dockStatsOpen ? 250 : 140;
+    const spaceBelow = work.y + work.height - (bounds.y + bounds.height);
+    const spaceAbove = bounds.y - work.y;
+
+    if (spaceBelow >= need) return "below";
+    if (spaceAbove >= need) return "above";
+    return spaceAbove > spaceBelow ? "above" : "below";
+  } catch {
+    return "below";
+  }
+}
+
+/**
+ * Apply dock-above / dock-below classes on the shell so flex order places
+ * the bar next to Saya without shifting her layout slot incorrectly.
+ */
+function applyDockPlacementClass() {
+  const shell = document.querySelector(".shell");
+  if (!shell) return;
+  shell.classList.toggle("dock-placement-above", dockOpen && dockPlacement === "above");
+  shell.classList.toggle("dock-placement-below", dockOpen && dockPlacement === "below");
+}
+
+/**
+ * Desktop Y of the pet-hit bottom edge (feet line), for jump-free chrome resize.
+ * @returns {Promise<number | null>}
+ */
+async function measurePetFeetScreenY() {
+  const pet = document.querySelector("#pet-hit");
+  if (!pet || !window.petApi?.bounds) return null;
+  try {
+    const bounds = await window.petApi.bounds();
+    if (!bounds) return null;
+    return bounds.y + pet.getBoundingClientRect().bottom;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Nudge the window so pet feet return to a captured screen Y (sub-pixel / CSS slack).
+ * @param {number | null | undefined} targetScreenY
+ */
+async function correctPetFeetScreenY(targetScreenY) {
+  if (targetScreenY == null || !Number.isFinite(targetScreenY)) return;
+  if (!window.petApi?.moveBy) return;
+  // Wait one frame so flex layout reflects the new dock / window size.
+  await new Promise((r) => requestAnimationFrame(() => r()));
+  const now = await measurePetFeetScreenY();
+  if (now == null) return;
+  const dy = Math.round(targetScreenY - now);
+  if (dy !== 0) window.petApi.moveBy({ dx: 0, dy });
+}
+
+/**
+ * Distance from the window client bottom to the pet-hit bottom (measured).
+ * @returns {number | null}
+ */
+function measureFeetFromBottomClient() {
+  const pet = document.querySelector("#pet-hit");
+  if (!pet) return null;
+  const bottom = pet.getBoundingClientRect().bottom;
+  return Math.max(0, Math.round(window.innerHeight - bottom));
+}
+
+/**
+ * Grow the OS window when bubble / dock need room; shrink back to body-only.
+ * Main-process setMode keeps character *feet* fixed; dockPlacement chooses
+ * whether chrome grows above or below so Saya does not jump.
+ * Skips while dragging (main process locks size); call again after release.
+ * @param {{ prevFeetFromBottom?: number, feetFromBottom?: number }} [feetOpts]
+ * @returns {Promise<void>}
+ */
+async function syncWindowChrome(feetOpts = {}) {
   if (isDragging || pointerArmed) return;
   /** @type {"compact" | "speak" | "dock" | "dockStats"} */
   let next = "compact";
@@ -221,11 +372,32 @@ function syncWindowChrome() {
   const cssMode = dockOpen ? "dock" : "compact";
   app.classList.remove("mode-compact", "mode-dock", "mode-panel");
   app.classList.add(`mode-${cssMode}`);
+  applyDockPlacementClass();
   if (!UI_MINIMAL) state.mode = cssMode;
 
-  if (next === windowChromeMode) return;
+  const placementKey = dockOpen ? dockPlacement : "";
+  const hasFeetOverride =
+    feetOpts.prevFeetFromBottom != null || feetOpts.feetFromBottom != null;
+  if (
+    next === windowChromeMode &&
+    placementKey === lastChromePlacement &&
+    !hasFeetOverride
+  ) {
+    return;
+  }
   windowChromeMode = next;
-  window.petApi?.setMode?.(next);
+  lastChromePlacement = placementKey;
+
+  /** @type {{ dockPlacement?: "above" | "below", prevFeetFromBottom?: number, feetFromBottom?: number }} */
+  const opts = {};
+  if (dockOpen) opts.dockPlacement = dockPlacement;
+  if (typeof feetOpts.prevFeetFromBottom === "number") {
+    opts.prevFeetFromBottom = feetOpts.prevFeetFromBottom;
+  }
+  if (typeof feetOpts.feetFromBottom === "number") {
+    opts.feetFromBottom = feetOpts.feetFromBottom;
+  }
+  await window.petApi?.setMode?.(next, Object.keys(opts).length ? opts : undefined);
 }
 
 // ---------- persistence helpers ----------
@@ -398,43 +570,118 @@ function spawnParticles(x, y, symbol = "✨") {
   }
 }
 
-// ---------- bottom shortcut dock ----------
+// ---------- shortcut dock (above / below character) ----------
 /**
- * Show / hide the bottom action dock (right-click).
+ * Show / hide the action dock (right-click).
+ * Opens beside Saya (below by default, above near the bottom edge) without
+ * moving her screen position — window grows around her feet.
  * @param {boolean} show
  * @param {{ clientX?: number, clientY?: number }} [pointer]
+ * @returns {Promise<void>}
  */
-function toggleDock(show, pointer = {}) {
+async function toggleDock(show, pointer = {}) {
   const dock = document.querySelector("#pet-dock");
   if (!dock) return;
-  dockOpen = Boolean(show);
-  if (!dockOpen) dockStatsOpen = false;
-  // Expand window first so the bar has room under the sprite (bottom anchor).
-  syncWindowChrome();
+  const willOpen = Boolean(show);
+
+  if (!willOpen) {
+    // Capture feet before chrome collapses so close does not drop her.
+    const feetY = await measurePetFeetScreenY();
+    const prevFeet = measureFeetFromBottomClient();
+    dockOpen = false;
+    dockStatsOpen = false;
+    dock.classList.add("closed");
+    applyDockPlacementClass();
+    updateDockStatsPanel();
+    await syncWindowChrome(
+      prevFeet != null ? { prevFeetFromBottom: prevFeet } : {},
+    );
+    await correctPetFeetScreenY(feetY);
+    refreshMouseIgnore(pointer.clientX, pointer.clientY);
+    return;
+  }
+
   if (dockOpen) {
+    // Already open — keep current side; still ensure chrome is applied.
     dock.classList.remove("closed");
+    applyDockPlacementClass();
     applyMouseIgnore(false);
     updateDockWanderText();
     updateDockStatsPanel();
-  } else {
-    dock.classList.add("closed");
-    updateDockStatsPanel();
-    refreshMouseIgnore(pointer.clientX, pointer.clientY);
+    return;
   }
+
+  // Feet screen Y before any layout change — gold standard for no-jump open.
+  const feetY = await measurePetFeetScreenY();
+  const prevFeet = measureFeetFromBottomClient();
+
+  // Resolve side first so setMode grows the correct direction.
+  dockPlacement = await chooseDockPlacement();
+  dockOpen = true;
+  applyDockPlacementClass();
+
+  /** @type {{ prevFeetFromBottom?: number, feetFromBottom?: number }} */
+  const feetOpts = {};
+  if (prevFeet != null) feetOpts.prevFeetFromBottom = prevFeet;
+  if (dockPlacement === "below") {
+    // Only real bar height under feet — not window slack (see main DOCK_BELOW_CHROME).
+    const estChrome = dockStatsOpen ? 244 : 94;
+    feetOpts.feetFromBottom = (prevFeet ?? 20) + estChrome;
+  } else if (prevFeet != null) {
+    // Dock above: feet stay at the bottom of the stack.
+    feetOpts.feetFromBottom = prevFeet;
+  }
+
+  // Resize first (dock still closed) so the bar does not flash in a tiny window.
+  await syncWindowChrome(feetOpts);
+  dock.classList.remove("closed");
+  applyDockPlacementClass();
+  // Pixel-snap after flex layout — fixes any residual below-dock jump.
+  await correctPetFeetScreenY(feetY);
+  applyMouseIgnore(false);
+  updateDockWanderText();
+  updateDockStatsPanel();
 }
 
 /**
  * Toggle secondary stats submenu (affinity / interactions / period).
  * @param {boolean} [show]
+ * @returns {Promise<void>}
  */
-function toggleDockStats(show = !dockStatsOpen) {
+async function toggleDockStats(show = !dockStatsOpen) {
   if (!dockOpen && show) {
-    // Ensure primary dock is visible first.
-    toggleDock(true);
+    // Ensure primary dock is visible first (await side + resize).
+    await toggleDock(true);
   }
-  dockStatsOpen = Boolean(show) && dockOpen;
-  syncWindowChrome();
+  const willShow = Boolean(show) && dockOpen;
+  if (willShow === dockStatsOpen) {
+    updateDockStatsPanel();
+    return;
+  }
+
+  const feetY = await measurePetFeetScreenY();
+  const prevFeet = measureFeetFromBottomClient();
+  dockStatsOpen = willShow;
+
+  /** @type {{ prevFeetFromBottom?: number, feetFromBottom?: number }} */
+  const feetOpts = {};
+  if (prevFeet != null) feetOpts.prevFeetFromBottom = prevFeet;
+  if (dockPlacement === "below") {
+    const estChrome = dockStatsOpen ? 244 : 94;
+    // Swap under-feet chrome: remove old estimate, add new (prevFeet already includes old bar).
+    const oldChrome = dockStatsOpen ? 94 : 244;
+    feetOpts.feetFromBottom = (prevFeet ?? 20) - oldChrome + estChrome;
+    if (feetOpts.feetFromBottom < 20) feetOpts.feetFromBottom = 20 + estChrome;
+  } else if (prevFeet != null) {
+    feetOpts.feetFromBottom = prevFeet;
+  }
+
+  // dock ↔ dockStats always resizes; clear skip keys.
+  windowChromeMode = "";
+  lastChromePlacement = "";
+  await syncWindowChrome(feetOpts);
   updateDockStatsPanel();
+  await correctPetFeetScreenY(feetY);
   if (dockStatsOpen) updateAffinityDom();
   applyMouseIgnore(false);
 }
@@ -471,10 +718,10 @@ function updateDockWanderText() {
 async function handleDockAction(action) {
   switch (action) {
     case "stats":
-      toggleDockStats(!dockStatsOpen);
+      await toggleDockStats(!dockStatsOpen);
       break;
     case "stats-close":
-      toggleDockStats(false);
+      await toggleDockStats(false);
       break;
     case "talk":
       say(Math.random() < 0.45 ? timeBucket() : "talk", { affinityGain: 1 });
@@ -508,12 +755,14 @@ async function handleDockAction(action) {
       break;
     }
     case "hop": {
-      const ok = wander.planHop({ force: true });
-      if (ok) spawnParticles(70, 90, "✨");
+      // Multi-action hop variants (hop → smile / bounce → hop …)
+      motion.lockFor(2800);
+      motion.playBehavior("menuHop", { force: true });
+      spawnParticles(70, 90, "✨");
       break;
     }
     case "sit": {
-      // Existing order: lock → soft talk affinity → force sit (talk may flash under sit).
+      // lock → affinity/line → multi-action rest chain (stretch→sit etc.)
       motion.lockFor(6000);
       const before = state.affinity;
       state = gainAffinity(state, 1);
@@ -529,7 +778,7 @@ async function handleDockAction(action) {
       updateBubbleDom();
       updateAffinityDom();
       persist();
-      motion.play("sit", { force: true, holdMs: 6000 });
+      motion.playBehavior("menuSit", { force: true, holdMs: 6000 });
       break;
     }
     case "toggle-wander":
@@ -571,8 +820,13 @@ function shellHtml() {
   const wanderOn = autoWanderEnabled;
   const periodLabel = TIME_BUCKET_LABELS[timeBucket()] || "此刻";
   // Primary dock: actions only. Affinity lives in a secondary submenu (星轨).
+  const placementClass = !dockOpen
+    ? ""
+    : dockPlacement === "above"
+      ? "dock-placement-above"
+      : "dock-placement-below";
   return `
-    <div class="shell art-body shell-minimal shell-with-bubble">
+    <div class="shell art-body shell-minimal shell-with-bubble${placementClass ? ` ${placementClass}` : ""}">
       <div class="${bubbleClass}" id="bubble" role="status" aria-live="polite" title="点击与沙夜对话">
         <div class="bubble-meta">
           <span class="bubble-name">${CHARACTER.shortName}</span>
@@ -748,10 +1002,18 @@ function bind() {
   if (pet) {
     const isDockEvent = (event) => Boolean(event.target?.closest?.("#pet-dock"));
 
-    const finishPointer = (treatAsDrag) => {
+    /**
+     * @param {boolean} treatAsDrag
+     * @param {{ clientX?: number, clientY?: number }} [pointer]
+     */
+    const finishPointer = (treatAsDrag, pointer = {}) => {
       const session = drag;
       const dragged = Boolean(treatAsDrag || isDragging || session?.moved);
       const hadPointer = Boolean(session || isDragging || pointerArmed);
+
+      notePointerClient(pointer.clientX, pointer.clientY);
+      // Hold solid hit-testing across rapid multi-clicks / post-drag settle.
+      if (hadPointer) armStickyHit();
 
       drag = null;
       isDragging = false;
@@ -775,14 +1037,17 @@ function bind() {
               if (!isDragging && !pointerArmed) {
                 deferred();
                 syncWindowChrome();
-                refreshMouseIgnore();
+                // Re-arm: async settle may outlast the first sticky window.
+                armStickyHit();
+                refreshMouseIgnore(lastPointerClientX, lastPointerClientY);
               }
             });
           });
         } else {
           void finishDragWithZone({ deferUi: false }).then(() => {
             syncWindowChrome();
-            refreshMouseIgnore();
+            armStickyHit();
+            refreshMouseIgnore(lastPointerClientX, lastPointerClientY);
           });
         }
         return true;
@@ -793,17 +1058,21 @@ function bind() {
       wander.resume();
       pendingAfterDrag = null;
       syncWindowChrome();
-      refreshMouseIgnore();
+      refreshMouseIgnore(lastPointerClientX, lastPointerClientY);
       return false;
     };
 
     pet.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
       if (isDockEvent(event)) return;
+      notePointerClient(event.clientX, event.clientY);
+      // Solid hit immediately — never let a follow-up click race into passthrough.
+      pointerArmed = true;
+      armStickyHit();
+      applyMouseIgnore(false);
       // Drag / click on body closes the shortcut bar so it does not steal space.
       if (dockOpen) toggleDock(false, { clientX: event.clientX, clientY: event.clientY });
       isDragging = false;
-      pointerArmed = true;
       pendingAfterDrag = null;
       wander.pause();
       drag = {
@@ -823,6 +1092,7 @@ function bind() {
 
     pet.addEventListener("pointermove", (event) => {
       if (!drag || drag.pointerId !== event.pointerId) return;
+      notePointerClient(event.clientX, event.clientY);
 
       const totalDx = event.screenX - drag.startX;
       const totalDy = event.screenY - drag.startY;
@@ -853,8 +1123,12 @@ function bind() {
 
     pet.addEventListener("pointerup", (event) => {
       if (drag && drag.pointerId !== event.pointerId) return;
+      notePointerClient(event.clientX, event.clientY);
       const moved = Boolean(drag?.moved || isDragging);
-      const dragged = finishPointer(moved);
+      const dragged = finishPointer(moved, {
+        clientX: event.clientX,
+        clientY: event.clientY,
+      });
       if (dragged) return;
       if (Date.now() < suppressClickUntil) return;
 
@@ -866,7 +1140,8 @@ function bind() {
 
     pet.addEventListener("pointercancel", (event) => {
       if (drag && event.pointerId != null && drag.pointerId !== event.pointerId) return;
-      finishPointer(true);
+      notePointerClient(event.clientX, event.clientY);
+      finishPointer(true, { clientX: event.clientX, clientY: event.clientY });
     });
 
     pet.addEventListener("lostpointercapture", () => {
@@ -912,6 +1187,7 @@ function bind() {
 document.addEventListener(
   "pointermove",
   (e) => {
+    notePointerClient(e.clientX, e.clientY);
     if (isDragging || pointerArmed) return;
     refreshMouseIgnore(e.clientX, e.clientY);
   },
@@ -920,6 +1196,13 @@ document.addEventListener(
 
 document.addEventListener("pointerleave", () => {
   if (isDragging || pointerArmed || dockOpen) return;
+  // Drop the sample so post-sticky refresh does not keep a stale "over pet" hit.
+  lastPointerClientX = null;
+  lastPointerClientY = null;
+  if (Date.now() < stickyHitUntil) {
+    // Stay solid through the multi-click burst; timer will open passthrough after.
+    return;
+  }
   applyMouseIgnore(true);
 });
 
@@ -973,17 +1256,21 @@ function boot() {
       if (mode === "dock" || mode === "dockStats") {
         dockOpen = true;
         dockStatsOpen = mode === "dockStats";
+        lastChromePlacement = dockPlacement;
         document.querySelector("#pet-dock")?.classList.remove("closed");
         app.classList.remove("mode-compact", "mode-dock", "mode-panel");
         app.classList.add("mode-dock");
+        applyDockPlacementClass();
         updateDockStatsPanel();
       } else if (mode === "compact" && dockOpen) {
         // Main/tray forced compact — collapse dock chrome in renderer too.
         dockOpen = false;
         dockStatsOpen = false;
+        lastChromePlacement = "";
         document.querySelector("#pet-dock")?.classList.add("closed");
         app.classList.remove("mode-compact", "mode-dock", "mode-panel");
         app.classList.add("mode-compact");
+        applyDockPlacementClass();
         updateDockStatsPanel();
       }
       return;

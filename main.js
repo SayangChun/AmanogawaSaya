@@ -28,7 +28,8 @@ let windowDragging = false;
 /**
  * Window modes — sized tightly around the full-body sprite so the
  * transparent chrome does not occupy a large desktop rectangle.
- * `speak` grows upward for the dialogue bubble (bottom anchor fixed).
+ * Resizes keep the character *feet* fixed on screen (not the window edge),
+ * so dock chrome can open above/below without Saya jumping.
  * Mouse passthrough (renderer) lets empty pixels click through to the desktop.
  */
 const WINDOW_MODES = {
@@ -43,8 +44,44 @@ const WINDOW_MODES = {
   panel: { width: 340, height: 520 },
 };
 
+/**
+ * Anchor inset from window bottom when the sprite is at the bottom of the stack
+ * (compact / speak / dock-above). Matches historical setMode −20px feet line.
+ */
+const FEET_PAD = 20;
+
+/**
+ * Layout height that actually sits *under* the sprite when the dock is below.
+ * Must be the real bar size — NOT (windowModeHeight − compactHeight).
+ * Dock windows intentionally keep slack above the stack (flex-end); that slack
+ * is above Saya, so counting it as “under feet” pushes her down on open.
+ *
+ * Primary: margin-top 2 + padding 13 + 2×38 buttons + gap 3 ≈ 94
+ * Stats: primary + dock-sub (affinity + pills + gaps) ≈ +150
+ */
+const DOCK_BELOW_CHROME = {
+  dock: 94,
+  dockStats: 244,
+};
+
+/** @type {"above" | "below"} dock placement relative to the character */
+let currentDockPlacement = "below";
+
 function modeSize(mode = currentMode) {
   return WINDOW_MODES[mode] || WINDOW_MODES.compact;
+}
+
+/**
+ * Distance from window bottom to the character feet anchor.
+ * Dock-below uses real chrome height only; window slack stays above the stack.
+ * @param {string} mode
+ * @param {"above" | "below"} [placement]
+ */
+function feetFromBottom(mode, placement = currentDockPlacement) {
+  if ((mode === "dock" || mode === "dockStats") && placement === "below") {
+    return FEET_PAD + (DOCK_BELOW_CHROME[mode] ?? DOCK_BELOW_CHROME.dock);
+  }
+  return FEET_PAD;
 }
 
 const STATE_PATH = path.join(app.getPath("userData"), "saya-pet-state.json");
@@ -174,11 +211,31 @@ function clampToWorkArea(x, y, width, height) {
 }
 
 /**
- * Resize while keeping the character anchor (bottom-center of window) fixed.
- * No-ops size write when already in target dimensions (avoids jitter while dragging).
+ * Resize while keeping the character *feet* fixed on screen.
+ * Dock placement (`above` | `below`) decides whether extra chrome grows
+ * upward or downward so Saya does not jump when the shortcut bar opens.
+ * No-ops when already at target size + placement (avoids jitter while dragging).
  * Blocked while the user is dragging the pet (window must not grow mid-drag).
+ *
+ * @param {string} mode
+ * @param {{
+ *   animate?: boolean,
+ *   force?: boolean,
+ *   dockPlacement?: "above" | "below",
+ *   prevFeetFromBottom?: number,
+ *   feetFromBottom?: number,
+ * }} [opts]
  */
-function setMode(mode, { animate = false, force = false } = {}) {
+function setMode(
+  mode,
+  {
+    animate = false,
+    force = false,
+    dockPlacement,
+    prevFeetFromBottom: prevFeetOverride,
+    feetFromBottom: nextFeetOverride,
+  } = {},
+) {
   // Full settings panel still unused — keep window compact if asked for panel.
   if (mode === "panel") {
     mode = "compact";
@@ -194,23 +251,45 @@ function setMode(mode, { animate = false, force = false } = {}) {
     return { mode: currentMode, ...mainWindow.getBounds(), blocked: true };
   }
 
+  const nextPlacement =
+    mode === "dock" || mode === "dockStats"
+      ? dockPlacement === "above" || dockPlacement === "below"
+        ? dockPlacement
+        : currentDockPlacement
+      : "below";
+
   const next = WINDOW_MODES[mode];
   const current = mainWindow.getBounds();
-  currentMode = mode;
+  const prevMode = currentMode;
+  const prevPlacement = currentDockPlacement;
 
   if (
     !force &&
     current.width === next.width &&
-    current.height === next.height
+    current.height === next.height &&
+    prevMode === mode &&
+    prevPlacement === nextPlacement &&
+    prevFeetOverride == null &&
+    nextFeetOverride == null
   ) {
     return { mode, ...current, skipped: true };
   }
 
+  // Feet screen position before resize (center-X + feet-Y).
+  // Renderer may pass measured insets when CSS chrome ≠ WINDOW_MODES slack.
+  const prevFeet =
+    typeof prevFeetOverride === "number" && Number.isFinite(prevFeetOverride)
+      ? prevFeetOverride
+      : feetFromBottom(prevMode, prevPlacement);
+  const nextFeet =
+    typeof nextFeetOverride === "number" && Number.isFinite(nextFeetOverride)
+      ? nextFeetOverride
+      : feetFromBottom(mode, nextPlacement);
   const anchorX = current.x + current.width / 2;
-  const anchorY = current.y + current.height - 20;
+  const anchorY = current.y + current.height - prevFeet;
 
   let x = Math.round(anchorX - next.width / 2);
-  let y = Math.round(anchorY - next.height + 20);
+  let y = Math.round(anchorY - (next.height - nextFeet));
   ({ x, y } = clampToWorkArea(x, y, next.width, next.height));
 
   if (!Number.isFinite(x) || !Number.isFinite(y)) {
@@ -218,6 +297,9 @@ function setMode(mode, { animate = false, force = false } = {}) {
     x = fallback.x;
     y = fallback.y;
   }
+
+  currentMode = mode;
+  currentDockPlacement = nextPlacement;
 
   const bounds = {
     x: Math.round(x),
@@ -227,7 +309,7 @@ function setMode(mode, { animate = false, force = false } = {}) {
   };
   mainWindow.setBounds(bounds, animate);
   savePersistedBounds(bounds, { immediate: true });
-  return { mode, ...bounds };
+  return { mode, dockPlacement: nextPlacement, ...bounds };
 }
 
 /** Move window without changing size; always re-assert mode dimensions. */
@@ -436,7 +518,9 @@ app.whenReady().then(() => {
     return display?.workArea ?? screen.getPrimaryDisplay().workArea;
   });
 
-  ipcMain.handle("pet:set-mode", (_e, mode) => setMode(mode));
+  ipcMain.handle("pet:set-mode", (_e, mode, options) =>
+    setMode(mode, options && typeof options === "object" ? options : {}),
+  );
 
   /**
    * Click-through for transparent desktop-pet chrome.

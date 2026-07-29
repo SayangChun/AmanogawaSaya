@@ -17,7 +17,7 @@ export const ZONE_CONFIG = {
   POST_SCENE_IDLE_COOLDOWN_MS: 3500,
 };
 
-/** Zone-weighted pool membership (v1). sleep excluded. */
+/** Zone-weighted pool membership. sleep excluded. */
 export const ZONE_IDLE_ACTIONS = [
   "breathe",
   "sway",
@@ -31,6 +31,10 @@ export const ZONE_IDLE_ACTIONS = [
   "sit",
   "alert",
   "coat",
+  "peek",
+  "think",
+  "yawn",
+  "giggle",
 ];
 
 /** Scalar cooldown defaults (ms) after a zone-picked action */
@@ -39,17 +43,21 @@ export const ACTION_COOLDOWN_MS = {
   stretch: 18000,
   wave: 18000,
   coat: 20000,
+  yawn: 22000,
   look: 8000,
   alert: 8000,
+  peek: 9000,
+  think: 10000,
   smile: 5000,
   nod: 5000,
   soft: 5000,
   calm: 5000,
   sway: 5000,
   breathe: 5000,
+  giggle: 12000,
 };
 
-const LOOKISH = new Set(["look", "alert", "soft"]);
+const LOOKISH = new Set(["look", "alert", "soft", "peek"]);
 
 /** @type {Record<string, Record<string, number>>} */
 const WEIGHTS = {
@@ -66,6 +74,10 @@ const WEIGHTS = {
     sit: 0.6,
     alert: 0.3,
     coat: 0.4,
+    peek: 0.7,
+    think: 0.8,
+    yawn: 0.5,
+    giggle: 0.6,
   },
   "edge-left": {
     breathe: 1.0,
@@ -80,6 +92,10 @@ const WEIGHTS = {
     sit: 0.9,
     alert: 1.4,
     coat: 0.5,
+    peek: 1.6,
+    think: 0.9,
+    yawn: 0.4,
+    giggle: 0.3,
   },
   "edge-right": {
     breathe: 1.0,
@@ -94,6 +110,10 @@ const WEIGHTS = {
     sit: 0.9,
     alert: 1.4,
     coat: 0.5,
+    peek: 1.6,
+    think: 0.9,
+    yawn: 0.4,
+    giggle: 0.3,
   },
   "edge-bottom": {
     breathe: 1.4,
@@ -108,6 +128,10 @@ const WEIGHTS = {
     sit: 1.6,
     alert: 0.5,
     coat: 0.6,
+    peek: 0.6,
+    think: 1.0,
+    yawn: 0.8,
+    giggle: 0.3,
   },
   "edge-top": {
     breathe: 1.0,
@@ -122,6 +146,10 @@ const WEIGHTS = {
     sit: 0.3,
     alert: 1.0,
     coat: 0.5,
+    peek: 1.5,
+    think: 1.1,
+    yawn: 0.4,
+    giggle: 0.4,
   },
   "corner-bl": {
     breathe: 1.3,
@@ -136,6 +164,10 @@ const WEIGHTS = {
     sit: 1.4,
     alert: 0.7,
     coat: 0.6,
+    peek: 0.8,
+    think: 1.1,
+    yawn: 0.7,
+    giggle: 0.2,
   },
   "corner-br": {
     breathe: 1.3,
@@ -150,6 +182,10 @@ const WEIGHTS = {
     sit: 1.4,
     alert: 0.7,
     coat: 0.6,
+    peek: 0.8,
+    think: 1.1,
+    yawn: 0.7,
+    giggle: 0.2,
   },
   "corner-tl": {
     breathe: 1.0,
@@ -164,6 +200,10 @@ const WEIGHTS = {
     sit: 0.4,
     alert: 1.6,
     coat: 0.5,
+    peek: 1.8,
+    think: 1.0,
+    yawn: 0.3,
+    giggle: 0.3,
   },
   "corner-tr": {
     breathe: 1.0,
@@ -178,6 +218,10 @@ const WEIGHTS = {
     sit: 0.4,
     alert: 1.6,
     coat: 0.5,
+    peek: 1.8,
+    think: 1.0,
+    yawn: 0.3,
+    giggle: 0.3,
   },
 };
 

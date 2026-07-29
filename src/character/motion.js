@@ -3,6 +3,9 @@
  *
  * 每个动作对应一组 PNG 帧（assets/animations/<action>/NN.png），
  * 按 fps 轮换显示；非循环动作结束后回 idle / sleep。
+ *
+ * 行为层（behaviors.js）：一个行为可映射多条加权变体，每条变体为动作链，
+ * 链内顺序播放、中间不回 idle，保证流畅衔接。
  */
 
 import { CHARACTER } from "./profile.js";
@@ -13,6 +16,13 @@ import {
   markActionCooldown,
   isLookishAction,
 } from "./screen-zone.js";
+import {
+  getBehavior,
+  pickVariant,
+  normalizeStep,
+  estimateChainMs,
+  primaryActionForBehavior,
+} from "./behaviors.js";
 
 /** @typedef {string} ActionId */
 
@@ -56,7 +66,7 @@ export const ACTIONS = (() => {
   return map;
 })();
 
-/** 闲置时随机切换的小动作 */
+/** 闲置时随机切换的小动作（单动作；偶发 idleFidget 链见 tickIdle） */
 const IDLE_POOL = [
   "sway",
   "look",
@@ -68,25 +78,18 @@ const IDLE_POOL = [
   "wave",
   "stretch",
   "sit",
+  "peek",
+  "think",
+  "giggle",
+  "yawn",
 ];
 
-const SCENE_ACTION = {
-  boot: "wave",
-  morning: "soft",
-  noon: "calm",
-  afternoon: "idle",
-  evening: "coat",
-  night: "sleep",
-  lateNight: "sleep",
-  tap: "bounce",
-  talk: "talk",
-  praise: "shy",
-  hide: "nod",
-  affinityUp: "celebrate",
-};
+/** 偶发「微序列」概率：连播两个小动作，更像自然行为 */
+const IDLE_FIDGET_CHANCE = 0.28;
 
+/** 兼容旧调用：行为 → 代表动作（首步） */
 export function actionForScene(scene) {
-  return SCENE_ACTION[scene] || "talk";
+  return primaryActionForBehavior(scene) || "talk";
 }
 
 export function bodyUrl(key) {
@@ -164,11 +167,59 @@ export function createMotionController(deps = {}) {
   /** After playScene hold ends, suppress sit-heavy zone picks */
   let postSceneUntil = 0;
 
+  /**
+   * Active multi-step chain (behavior / playChain).
+   * @type {null | {
+   *   token: number,
+   *   steps: ReturnType<typeof normalizeStep>[],
+   *   index: number,
+   *   behaviorId: string|null,
+   *   fromIdle: boolean,
+   * }}
+   */
+  let activeChain = null;
+  let chainToken = 0;
+  /** Currently playing behavior id (for UI / debug) */
+  let currentBehavior = null;
+
   function clearActionTimer() {
     if (actionTimer) {
       clearTimeout(actionTimer);
       actionTimer = null;
     }
+  }
+
+  function clearChain() {
+    activeChain = null;
+    chainToken += 1;
+    currentBehavior = null;
+    if (actor?.dataset) delete actor.dataset.behavior;
+  }
+
+  /**
+   * Advance to next chain step, or return false if chain is done / cancelled.
+   * @returns {boolean}
+   */
+  function advanceChain() {
+    if (!activeChain) return false;
+    const chain = activeChain;
+    if (chain.token !== chainToken) return false;
+    const nextIndex = chain.index + 1;
+    if (nextIndex >= chain.steps.length) {
+      clearChain();
+      return false;
+    }
+    chain.index = nextIndex;
+    const step = chain.steps[nextIndex];
+    const endless = step.holdMs === null;
+    play(step.action, {
+      force: true,
+      fromIdle: chain.fromIdle,
+      chainStep: true,
+      holdMs: endless ? null : step.holdMs,
+      endless,
+    });
+    return true;
   }
 
   function clearIdleTimer() {
@@ -242,6 +293,27 @@ export function createMotionController(deps = {}) {
     }
 
     stampZoneDom(zoneIdForDom);
+
+    // Occasional multi-action fidget sequence (smoother "living" idle)
+    if (
+      !zoneIdForDom &&
+      Date.now() >= postSceneUntil &&
+      Math.random() < IDLE_FIDGET_CHANCE &&
+      getBehavior("idleFidget")
+    ) {
+      playBehavior("idleFidget", { fromIdle: true, force: false });
+      return;
+    }
+    // Zone path: still sometimes use coordinated micro-chains
+    if (
+      zoneIdForDom &&
+      Date.now() >= postSceneUntil &&
+      Math.random() < IDLE_FIDGET_CHANCE * 0.65
+    ) {
+      playBehavior("idleFidget", { fromIdle: true, force: false });
+      return;
+    }
+
     markActionCooldown(pick, actionCooldowns);
     play(pick, { fromIdle: true });
 
@@ -258,7 +330,8 @@ export function createMotionController(deps = {}) {
   function scheduleIdle() {
     clearIdleTimer();
     if (!enabled) return;
-    const wait = 4000 + Math.random() * 6000;
+    // Slightly tighter cadence so multi-action chains feel lively without rushing
+    const wait = 3800 + Math.random() * 5800;
     idleTimer = setTimeout(() => {
       void tickIdle();
     }, wait);
@@ -418,6 +491,7 @@ export function createMotionController(deps = {}) {
     if (paused) {
       savedBeforePause = currentAction === "drag" ? savedBeforePause : currentAction;
       clearIdleTimer();
+      clearChain();
       play("drag", { force: true });
     } else if (opts.skipResume) {
       // Caller owns the next play (drag-end settle). Do not scheduleIdle here —
@@ -434,7 +508,13 @@ export function createMotionController(deps = {}) {
 
   /**
    * @param {ActionId} actionId
-   * @param {{ force?: boolean, fromIdle?: boolean, holdMs?: number }} [opts]
+   * @param {{
+   *   force?: boolean,
+   *   fromIdle?: boolean,
+   *   holdMs?: number|null,
+   *   chainStep?: boolean,
+   *   endless?: boolean,
+   * }} [opts]
    */
   function play(actionId, opts = {}) {
     if (!actor) return;
@@ -442,7 +522,8 @@ export function createMotionController(deps = {}) {
       scheduleIdle();
       return;
     }
-    const def = ACTIONS[actionId] || ACTIONS.idle;
+    const resolvedId = ACTIONS[actionId] ? actionId : "idle";
+    const def = ACTIONS[resolvedId] || ACTIONS.idle;
     const now = Date.now();
 
     if (!opts.force && opts.fromIdle && now < lockedUntil) {
@@ -450,8 +531,13 @@ export function createMotionController(deps = {}) {
       return;
     }
 
-    currentAction = actionId;
-    applyCss(actionId);
+    // External play cancels an in-flight multi-action chain (unless continuing it).
+    if (!opts.chainStep) {
+      clearChain();
+    }
+
+    currentAction = resolvedId;
+    applyCss(resolvedId);
     startFramePlayback(def);
     onArtChange("body");
 
@@ -459,37 +545,179 @@ export function createMotionController(deps = {}) {
     // Always drop a pending idle-pool tick; re-schedule below when appropriate.
     // Otherwise a stale timer can cancel walk/hop mid-locomotion.
     clearIdleTimer();
-    const hold = opts.holdMs ?? def.duration;
-    // Timed actions (including looping clips like walk): hold then fall back to idle/sleep.
+
+    let hold = null;
+    if (opts.endless || opts.holdMs === null) {
+      hold = null;
+    } else if (opts.holdMs != null && opts.holdMs > 0) {
+      hold = Number(opts.holdMs);
+    } else if (def.duration != null && def.duration > 0) {
+      hold = Number(def.duration);
+    } else if (!def.loop) {
+      const frames = def.frames?.length || 1;
+      const fps = Math.max(0.5, Number(def.fps) || 4);
+      hold = Math.max(800, Math.round((frames / fps) * 1000) + 200);
+    }
+
+    // Timed actions (including looping clips like walk): hold then chain / fallback.
     if (hold && hold > 0) {
       lockedUntil = now + hold;
-      const played = actionId;
+      const played = resolvedId;
+      const chainTok = chainToken;
       actionTimer = setTimeout(() => {
         if (currentAction !== played) {
           scheduleIdle();
           return;
+        }
+        // Seamless multi-action: continue chain without flashing idle
+        if (activeChain && activeChain.token === chainTok) {
+          if (advanceChain()) return;
         }
         const ctx = actor?.dataset.context;
         const fallback = ctx === "sleep" ? "sleep" : "idle";
         play(fallback, { force: true, fromIdle: true });
       }, hold);
     } else if (def.loop) {
-      // Endless loop (idle / sleep) — idle pool may swap later.
+      // Endless loop (idle / sleep) — end of chain if we landed here as last step
+      if (activeChain && activeChain.token === chainToken) {
+        // Last step is endless (e.g. sleep) — clear chain bookkeeping
+        clearChain();
+      }
       lockedUntil = 0;
       scheduleIdle();
     } else {
       lockedUntil = now + 800;
-      scheduleIdle();
+      const played = resolvedId;
+      const chainTok = chainToken;
+      actionTimer = setTimeout(() => {
+        if (currentAction !== played) {
+          scheduleIdle();
+          return;
+        }
+        if (activeChain && activeChain.token === chainTok) {
+          if (advanceChain()) return;
+        }
+        const ctx = actor?.dataset.context;
+        play(ctx === "sleep" ? "sleep" : "idle", { force: true, fromIdle: true });
+      }, 800);
     }
 
     try {
-      onActionChange(actionId, {
+      onActionChange(resolvedId, {
         fromIdle: Boolean(opts.fromIdle),
         holdMs: hold ?? null,
+        behavior: currentBehavior,
       });
     } catch {
       // ignore listener errors
     }
+  }
+
+  /**
+   * Play a sequence of actions without idle between steps.
+   * @param {import("./behaviors.js").ChainStep[]} chain
+   * @param {{ force?: boolean, fromIdle?: boolean, behaviorId?: string }} [opts]
+   */
+  function playChain(chain, opts = {}) {
+    if (!actor) return;
+    const steps = (chain || []).map(normalizeStep).filter((s) => s.action);
+    if (!steps.length) {
+      play("idle", { force: Boolean(opts.force), fromIdle: Boolean(opts.fromIdle) });
+      return;
+    }
+    if (paused && opts.fromIdle) {
+      scheduleIdle();
+      return;
+    }
+    if (!opts.force && opts.fromIdle && Date.now() < lockedUntil) {
+      scheduleIdle();
+      return;
+    }
+
+    clearChain();
+    const token = ++chainToken;
+    currentBehavior = opts.behaviorId || null;
+    activeChain = {
+      token,
+      steps,
+      index: 0,
+      behaviorId: opts.behaviorId || null,
+      fromIdle: Boolean(opts.fromIdle),
+    };
+
+    if (actor && currentBehavior) {
+      actor.dataset.behavior = currentBehavior;
+    }
+
+    const first = steps[0];
+    const endless = first.holdMs === null;
+    play(first.action, {
+      force: true,
+      fromIdle: Boolean(opts.fromIdle),
+      chainStep: true,
+      holdMs: endless ? null : first.holdMs,
+      endless,
+    });
+  }
+
+  /**
+   * Resolve a named behavior (weighted multi-variant chains) and play it.
+   * @param {string} behaviorId
+   * @param {{ force?: boolean, fromIdle?: boolean, holdMs?: number }} [opts]
+   */
+  function playBehavior(behaviorId, opts = {}) {
+    const def = getBehavior(behaviorId);
+    if (!def) {
+      play(behaviorId, { force: Boolean(opts.force), fromIdle: Boolean(opts.fromIdle) });
+      return;
+    }
+
+    if (def.context === "sleep") setContext("sleep");
+    else if (def.context != null) setContext(def.context);
+    else if (
+      behaviorId === "night" ||
+      behaviorId === "lateNight" ||
+      behaviorId === "sleep"
+    ) {
+      setContext("sleep");
+    } else if (!opts.fromIdle) {
+      // Intentional scene/menu behaviors clear sleep unless they set it
+      setContext("");
+    }
+
+    const variant = pickVariant(def.variants);
+    let chain = variant.chain;
+    // Optional hold override (e.g. menu sit longer) — apply to last step
+    if (opts.holdMs && opts.holdMs > 0) {
+      const steps = chain.map(normalizeStep);
+      const last = steps[steps.length - 1];
+      // Don't force a finite hold onto endless sleep unless single-step
+      if (last.holdMs === null && steps.length > 1) {
+        // leave sleep endless; stretch previous pose if present
+        const prev = steps[steps.length - 2];
+        steps[steps.length - 2] = {
+          action: prev.action,
+          holdMs: opts.holdMs,
+        };
+      } else {
+        steps[steps.length - 1] = {
+          action: last.action,
+          holdMs: opts.holdMs,
+        };
+      }
+      chain = steps;
+    }
+
+    // Idle fidget: never force through locks; scenes/menus: force by default
+    const force = opts.fromIdle ? Boolean(opts.force) : opts.force !== false;
+
+    playChain(chain, {
+      force,
+      fromIdle: Boolean(opts.fromIdle),
+      behaviorId,
+    });
+
+    return estimateChainMs(chain, ACTIONS);
   }
 
   function setContext(ctx) {
@@ -545,6 +773,7 @@ export function createMotionController(deps = {}) {
     clearActionTimer();
     clearIdleTimer();
     clearFrameTimer();
+    clearChain();
     playingToken += 1;
     root = null;
     actor = null;
@@ -568,11 +797,26 @@ export function createMotionController(deps = {}) {
   }
 
   function playScene(scene, extra = {}) {
+    const behavior = getBehavior(scene);
+    if (behavior) {
+      const chainMs = playBehavior(scene, {
+        force: true,
+        fromIdle: false,
+        ...extra,
+      });
+      const holdMs =
+        extra.holdMs && extra.holdMs > 0
+          ? Number(extra.holdMs)
+          : Math.max(1200, Number(chainMs) || 1200);
+      postSceneUntil = Date.now() + holdMs + ZONE_CONFIG.POST_SCENE_IDLE_COOLDOWN_MS;
+      return;
+    }
+
+    // Fallback: treat scene name as action id
     const action = actionForScene(scene);
     if (action === "sleep") setContext("sleep");
     else setContext("");
     play(action, { force: true, ...extra });
-    // After scene hold ends, suppress sit-heavy zone idle for a short window.
     const def = ACTIONS[action] || ACTIONS.idle;
     const hold = extra.holdMs ?? def.duration;
     const holdMs = hold && hold > 0 ? Number(hold) : 1200;
@@ -583,16 +827,23 @@ export function createMotionController(deps = {}) {
     return currentAction;
   }
 
+  function getBehaviorId() {
+    return currentBehavior;
+  }
+
   return {
     attach,
     detach,
     play,
+    playChain,
+    playBehavior,
     playScene,
     setContext,
     setPaused,
     setFacing,
     getFacing,
     getAction,
+    getBehaviorId,
     scheduleIdle,
     lockFor,
     isPaused,

@@ -283,8 +283,40 @@
 .act-talk .pet-body,
 .act-alert .pet-body,
 .act-shy .pet-body,
-.act-wave .pet-body {
+.act-wave .pet-body,
+.act-think .pet-body,
+.act-peek .pet-body,
+.act-yawn .pet-body,
+.act-greet .pet-body,
+.act-rest .pet-body {
   animation: body-idle 3.2s ease-in-out infinite;
+}
+
+/* Soft bounce on giggle — coordinates with smile/bounce frames */
+.act-giggle .pet-body {
+  animation: body-giggle 0.55s ease-in-out 4;
+}
+
+.act-giggle .pet-shadow {
+  animation: shadow-walk 0.55s ease-in-out 4;
+}
+
+/* Think: quieter settle; peek: tiny lean cue */
+.act-think .pet-body {
+  animation: body-breathe 3.6s ease-in-out infinite;
+}
+
+.act-peek .pet-body {
+  animation: body-sway-soft 1.4s ease-in-out 2;
+}
+
+.act-yawn .pet-body {
+  animation: body-breathe 2.8s ease-in-out 1;
+}
+
+.act-rest .pet-shadow {
+  transform: translateX(-50%) scaleX(1.12);
+  opacity: 0.88;
 }
 
 .act-bounce .pet-body {
@@ -342,7 +374,7 @@
   opacity: 0.35;
 }
 
-/* ===== Bottom shortcut dock (right-click) ===== */
+/* ===== Shortcut dock (right-click; above or below character) ===== */
 .dock {
   width: 100%;
   max-width: 268px;
@@ -355,13 +387,46 @@
   border: 1px solid var(--line);
   box-shadow: var(--shadow);
   backdrop-filter: blur(14px);
-  margin-top: 2px;
   z-index: 4;
   flex-shrink: 0;
   pointer-events: auto;
   -webkit-app-region: no-drag;
-  animation: dock-in 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.15);
+  animation: dock-in-below 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.15);
+  transform-origin: top center;
+}
+
+/* Default / explicit: bar under feet */
+.shell.dock-placement-below .dock,
+.shell:not(.dock-placement-above) .dock {
+  margin-top: 2px;
+  margin-bottom: 0;
+  transform-origin: top center;
+  animation-name: dock-in-below;
+}
+
+/* Bar above the sprite (near screen bottom edge) */
+.shell.dock-placement-above .bubble {
+  order: 0;
+}
+.shell.dock-placement-above .dock {
+  order: 1;
+  margin-top: 0;
+  margin-bottom: 2px;
   transform-origin: bottom center;
+  animation-name: dock-in-above;
+}
+.shell.dock-placement-above .stage {
+  order: 2;
+}
+
+.shell.dock-placement-below .bubble {
+  order: 0;
+}
+.shell.dock-placement-below .stage {
+  order: 1;
+}
+.shell.dock-placement-below .dock {
+  order: 2;
 }
 
 .dock.closed {
@@ -576,7 +641,7 @@
   height: 170px;
 }
 
-/* Dock open: keep sprite size stable; bar sits under feet */
+/* Dock open: keep sprite size stable; bar sits above/below without scaling her */
 .mode-dock.shell-with-bubble .pet-hit,
 .mode-dock .pet-hit {
   width: 120px;
@@ -653,7 +718,19 @@
   color: var(--danger);
 }
 
-@keyframes dock-in {
+/* Appear from the character: below → rise slightly; above → drop slightly */
+@keyframes dock-in-below {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes dock-in-above {
   from {
     opacity: 0;
     transform: translateY(6px) scale(0.96);
@@ -691,6 +768,19 @@
   }
   50% {
     transform: translate3d(0, -2px, 0);
+  }
+}
+
+@keyframes body-giggle {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  35% {
+    transform: translate3d(0, -3px, 0);
+  }
+  70% {
+    transform: translate3d(0, -1px, 0);
   }
 }
 
