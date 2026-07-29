@@ -66,11 +66,15 @@ export const ANIM_MANIFEST = {
         "./assets/animations/walk/00.png",
         "./assets/animations/walk/01.png",
         "./assets/animations/walk/02.png",
-        "./assets/animations/walk/03.png"
+        "./assets/animations/walk/03.png",
+        "./assets/animations/walk/04.png",
+        "./assets/animations/walk/05.png",
+        "./assets/animations/walk/06.png",
+        "./assets/animations/walk/07.png"
       ],
-      "fps": 4,
+      "fps": 8,
       "loop": true,
-      "duration": 2800,
+      "duration": 3200,
       "holdLast": false
     },
     "hop": {
@@ -78,11 +82,13 @@ export const ANIM_MANIFEST = {
         "./assets/animations/hop/00.png",
         "./assets/animations/hop/01.png",
         "./assets/animations/hop/02.png",
-        "./assets/animations/hop/03.png"
+        "./assets/animations/hop/03.png",
+        "./assets/animations/hop/04.png",
+        "./assets/animations/hop/05.png"
       ],
-      "fps": 5,
+      "fps": 8,
       "loop": false,
-      "duration": 1100,
+      "duration": 1400,
       "holdLast": false
     },
     "sit": {
@@ -185,11 +191,13 @@ export const ANIM_MANIFEST = {
         "./assets/animations/bounce/00.png",
         "./assets/animations/bounce/01.png",
         "./assets/animations/bounce/02.png",
-        "./assets/animations/bounce/03.png"
+        "./assets/animations/bounce/03.png",
+        "./assets/animations/bounce/04.png",
+        "./assets/animations/bounce/05.png"
       ],
-      "fps": 5,
+      "fps": 8,
       "loop": false,
-      "duration": 1200,
+      "duration": 1400,
       "holdLast": false
     },
     "alert": {

@@ -1,12 +1,10 @@
 /**
- * 自主漫游：播放 walk / hop 时同步移动 Electron 窗口位置。
- * 让沙夜在桌面上自己走动，而不是只在原地踏步。
+ * 自主漫游：播放 walk 时同步移动 Electron 窗口位置。
+ * hop / bounce 为原地小跳，不平移窗口。
  */
 
 /** px per second while walking (screen space) */
 const WALK_SPEED = 72;
-/** px per second while hopping forward (screen space) */
-const HOP_FORWARD_SPEED = 90;
 /** roam planner cadence */
 const ROAM_MIN_MS = 9000;
 const ROAM_MAX_MS = 20000;
@@ -171,9 +169,10 @@ export function createWanderController(deps) {
       return;
     }
 
-    // If motion left walk/hop (user interaction / scene), stop moving.
+    // If motion left walk (user interaction / scene), stop moving.
+    // hop / bounce are in-place clips — they must not drive window translation.
     const act = motion.getAction?.();
-    if (act !== "walk" && act !== "hop" && act !== "bounce") {
+    if (act !== "walk") {
       stopLocomotion();
       return;
     }
@@ -194,8 +193,8 @@ export function createWanderController(deps) {
   }
 
   /**
-   * Called from motion actionChange when walk / hop starts.
-   * Always drives locomotion when a walk/hop clip plays — independent of auto-roam.
+   * Called from motion actionChange when walk starts.
+   * Drives locomotion for walk only; hop/bounce stay in place.
    * @param {string} actionId
    * @param {{ holdMs?: number|null }} [meta]
    */
@@ -221,29 +220,9 @@ export function createWanderController(deps) {
       return;
     }
 
-    if (actionId === "bounce") {
+    // hop / bounce: happy in-place jump — keep horizontal window position fixed.
+    if (actionId === "bounce" || actionId === "hop") {
       stopLocomotion();
-      return;
-    }
-
-    if (actionId === "hop") {
-      let dir;
-      if (locomotion?.vx) {
-        dir = Math.sign(locomotion.vx) || (Math.random() < 0.5 ? -1 : 1);
-      } else {
-        const facing = motion.getFacing?.();
-        dir = facing === "left" ? -1 : 1;
-      }
-      motion.setFacing(dir);
-      const hold = Number(meta.holdMs) > 0 ? Number(meta.holdMs) : 1100;
-      const now = Date.now();
-      const vx = dir * HOP_FORWARD_SPEED;
-      locomotion = {
-        kind: "hop",
-        vx,
-        until: now + hold + 40,
-      };
-      startRaf();
       return;
     }
 
@@ -367,6 +346,7 @@ export function createWanderController(deps) {
   }
 
   /**
+   * Happy hop in place — plays the hop clip without moving the window.
    * @param {{ force?: boolean }} [opts]
    */
   function planHop(opts = {}) {
@@ -377,22 +357,10 @@ export function createWanderController(deps) {
       return false;
     }
 
-    const facing = motion.getFacing?.();
-    const dir = facing === "left" ? -1 : 1;
-    motion.setFacing(dir);
+    stopLocomotion();
     motion.setContext?.("");
-    const now = Date.now();
-    const vx = dir * HOP_FORWARD_SPEED;
-    locomotion = {
-      kind: "hop",
-      vx,
-      until: now + 1200,
-    };
-    moveCarryX = 0;
-    moveCarryY = 0;
     motion.lockFor?.(1200);
-    motion.play("hop", { force: true, holdMs: 1100 });
-    startRaf();
+    motion.play("hop", { force: true, holdMs: 1400 });
     try {
       onRoamStart?.("hop");
     } catch {

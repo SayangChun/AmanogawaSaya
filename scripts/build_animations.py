@@ -281,8 +281,10 @@ def main() -> None:
     breathe_frames = [base, soft, poses["idle_peak"], soft]
     sway_frames = [base, poses["look"], base, poses["walk_mid"], base]
     look_frames = [base, poses["look"], base]
-    walk_frames = [poses["walk_a"], poses["walk_mid"], poses["walk_b"], base]
-    hop_frames = [poses["crouch"], poses["hop"], poses["crouch"], base]
+    # Prefer denser locomotion packs from rebuild_locomotion.py when present.
+    # Fallback: short 4-frame placeholders (stiffer — run rebuild_locomotion.py).
+    walk_frames = [poses["walk_a"], poses["walk_mid"], poses["walk_b"], poses["walk_a"]]
+    hop_frames = [poses["crouch"], poses["hop"], poses["crouch"], soft]
     sit_frames = [base, poses["crouch"], poses["sit"], poses["sit"]]
     stretch_frames = [base, poses["stretch"], poses["stretch"], base]
     calm_frames = [soft, base, soft]
@@ -331,16 +333,16 @@ def main() -> None:
         },
         "walk": {
             "frames": save_seq("walk", walk_frames),
-            "fps": 4,
+            "fps": 8,
             "loop": True,
-            "duration": 2800,
+            "duration": 3200,
             "holdLast": False,
         },
         "hop": {
             "frames": save_seq("hop", hop_frames),
-            "fps": 5,
+            "fps": 8,
             "loop": False,
-            "duration": 1100,
+            "duration": 1400,
             "holdLast": False,
         },
         "sit": {
@@ -401,9 +403,9 @@ def main() -> None:
         },
         "bounce": {
             "frames": save_seq("bounce", bounce_frames),
-            "fps": 5,
+            "fps": 8,
             "loop": False,
-            "duration": 1200,
+            "duration": 1400,
             "holdLast": False,
         },
         "alert": {
