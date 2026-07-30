@@ -14,8 +14,7 @@
 /* Opt-in only: empty stage / glow / stars must not own a hit rectangle */
 .shell .pet-hit,
 .shell .bubble:not(.closed),
-.shell .dock,
-.shell .panel {
+.shell .dock {
   pointer-events: auto;
 }
 
@@ -125,11 +124,6 @@
   flex-shrink: 0;
   z-index: 2;
   pointer-events: auto;
-}
-
-.mode-panel .pet-hit {
-  width: 132px;
-  height: 186px;
 }
 
 .pet-hit:active,
@@ -604,33 +598,10 @@
   }
 }
 
-.mode-compact .panel {
-  display: none;
-}
-
-.mode-dock .panel {
-  display: none;
-}
-
-/* Minimal stage: no full panel; bubble + dock allowed */
-.shell-minimal .panel,
-.shell-minimal .compact-hint {
-  display: none !important;
-}
-
-.shell-minimal:not(.shell-with-bubble) .bubble {
-  display: none !important;
-}
-
+/* Minimal stage: bubble + dock only */
 .shell-minimal {
   padding: 0;
   justify-content: flex-end;
-}
-
-.shell-minimal:not(.shell-with-bubble) .stage {
-  min-height: 0;
-  width: 100%;
-  height: 100%;
 }
 
 /* Compact floating window: bubble above full-body sprite */
@@ -745,47 +716,6 @@
 
 .dock-btn.danger:hover .lbl {
   color: var(--danger);
-}
-
-/* Appear from the character: below → rise slightly; above → drop slightly */
-@keyframes dock-in-below {
-  from {
-    opacity: 0;
-    transform: translateY(-6px) scale(0.96);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@keyframes dock-in-above {
-  from {
-    opacity: 0;
-    transform: translateY(6px) scale(0.96);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-.compact-hint {
-  position: absolute;
-  left: 50%;
-  bottom: 0;
-  transform: translateX(-50%);
-  font-size: 0.58rem;
-  color: rgba(180, 200, 230, 0.4);
-  letter-spacing: 0.06em;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.3s ease;
-  white-space: nowrap;
-}
-
-.mode-compact .shell:hover .compact-hint {
-  opacity: 1;
 }
 
 /* ===== Keyframes — translate-only polish (no scale: scale resamples

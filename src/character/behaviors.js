@@ -27,13 +27,34 @@ export const BEHAVIORS = {
       { weight: 0.8, chain: ["giggle", "wave"] },
     ],
   },
+  // 5–7 清晨
+  dawn: {
+    variants: [
+      { weight: 2.0, chain: ["yawn", "stretch"] },
+      { weight: 1.6, chain: ["stretch", "soft"] },
+      { weight: 1.3, chain: ["breathe", "soft"] },
+      { weight: 1.0, chain: ["yawn", "soft"] },
+      { weight: 0.9, chain: ["look", "soft"] },
+    ],
+  },
+  // 7–9 早晨
   morning: {
     variants: [
       { weight: 2.0, chain: ["stretch", "soft"] },
-      { weight: 1.6, chain: ["yawn", "soft"] },
-      { weight: 1.4, chain: ["soft", "smile"] },
-      { weight: 1.0, chain: ["stretch", "wave"] },
-      { weight: 0.9, chain: ["breathe", "soft", "nod"] },
+      { weight: 1.6, chain: ["soft", "smile"] },
+      { weight: 1.4, chain: ["stretch", "wave"] },
+      { weight: 1.0, chain: ["breathe", "soft", "nod"] },
+      { weight: 0.9, chain: ["wave", "smile"] },
+    ],
+  },
+  // 9–11 上午
+  forenoon: {
+    variants: [
+      { weight: 2.0, chain: ["soft", "nod"] },
+      { weight: 1.5, chain: ["think", "soft"] },
+      { weight: 1.3, chain: ["look", "smile"] },
+      { weight: 1.0, chain: ["breathe", "nod"] },
+      { weight: 0.9, chain: ["sway", "soft"] },
     ],
   },
   noon: {
@@ -54,6 +75,7 @@ export const BEHAVIORS = {
       { weight: 0.9, chain: ["coat", "soft"] },
     ],
   },
+  // 17–19 傍晚
   evening: {
     variants: [
       { weight: 2.0, chain: ["coat", "soft"] },
@@ -63,6 +85,17 @@ export const BEHAVIORS = {
       { weight: 0.8, chain: ["think", "soft"] },
     ],
   },
+  // 19–21 晚上（尚未入眠语境）
+  earlyNight: {
+    variants: [
+      { weight: 2.0, chain: ["coat", "soft"] },
+      { weight: 1.5, chain: ["soft", "look"] },
+      { weight: 1.2, chain: ["think", "calm"] },
+      { weight: 1.0, chain: ["sway", "soft"] },
+      { weight: 0.9, chain: ["coat", "nod"] },
+    ],
+  },
+  // 21–24 夜晚
   night: {
     context: "sleep",
     variants: [
@@ -74,6 +107,7 @@ export const BEHAVIORS = {
       { weight: 0.85, chain: ["prone", "soft"] },
     ],
   },
+  // 0–5 深夜
   lateNight: {
     context: "sleep",
     variants: [

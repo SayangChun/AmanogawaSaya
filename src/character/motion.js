@@ -91,23 +91,13 @@ const IDLE_POOL = [
 const IDLE_FIDGET_CHANCE = 0.36;
 
 /** 兼容旧调用：行为 → 代表动作（首步） */
-export function actionForScene(scene) {
+function actionForScene(scene) {
   return primaryActionForBehavior(scene) || "talk";
 }
 
-export function bodyUrl(key) {
+function bodyUrl(key) {
   const bodies = CHARACTER.bodies;
   return bodies[key] || bodies.default;
-}
-
-/** @deprecated */
-export function faceUrl(key) {
-  return bodyUrl(key === "idle" ? "default" : key);
-}
-
-/** @deprecated */
-export function portraitUrl(key) {
-  return bodyUrl(key === "calm" || key === "idle" ? "default" : key);
 }
 
 /**
@@ -148,8 +138,6 @@ export function createMotionController(deps = {}) {
   let enabled = true;
   let paused = false;
   let savedBeforePause = "idle";
-  /** @type {(art: string) => void} */
-  let onArtChange = () => {};
   /** @type {(actionId: string, meta: { fromIdle?: boolean, holdMs?: number|null }) => void} */
   let onActionChange = () => {};
 
@@ -163,6 +151,8 @@ export function createMotionController(deps = {}) {
   let playingToken = 0;
   /** Invalidates in-flight image load handlers so stale swaps cannot double-show layers. */
   let swapToken = 0;
+  /** Last applied act-* class (skip full classList scan when unchanged). */
+  let lastActClass = "";
 
   /** actionId → readyAt ms */
   /** @type {Map<string, number>} */
@@ -346,10 +336,17 @@ export function createMotionController(deps = {}) {
   function applyCss(actionId) {
     if (!actor) return;
     const def = ACTIONS[actionId] || ACTIONS.idle;
-    for (const cls of [...actor.classList]) {
-      if (cls.startsWith("act-")) actor.classList.remove(cls);
+    const nextCls = def.css || `act-${actionId}`;
+    if (nextCls !== lastActClass) {
+      if (lastActClass) actor.classList.remove(lastActClass);
+      else {
+        for (const cls of [...actor.classList]) {
+          if (cls.startsWith("act-")) actor.classList.remove(cls);
+        }
+      }
+      actor.classList.add(nextCls);
+      lastActClass = nextCls;
     }
-    actor.classList.add(def.css || `act-${actionId}`);
     actor.dataset.action = actionId;
     applyFacingClass();
   }
@@ -545,7 +542,6 @@ export function createMotionController(deps = {}) {
     currentAction = resolvedId;
     applyCss(resolvedId);
     startFramePlayback(def);
-    onArtChange("body");
 
     clearActionTimer();
     // Always drop a pending idle-pool tick; re-schedule below when appropriate.
@@ -730,7 +726,11 @@ export function createMotionController(deps = {}) {
     if (actor) actor.dataset.context = ctx || "";
   }
 
+  /** Preload once per process — paint() re-attach must not re-decode every frame. */
+  let framesPreloaded = false;
   function preloadAll() {
+    if (framesPreloaded) return;
+    framesPreloaded = true;
     const seen = new Set();
     for (const def of Object.values(ACTIONS)) {
       for (const url of def.frames || []) {
@@ -740,21 +740,13 @@ export function createMotionController(deps = {}) {
         img.src = url;
       }
     }
-    for (const key of Object.keys(CHARACTER.bodies)) {
-      const url = bodyUrl(key);
-      if (seen.has(url)) continue;
-      seen.add(url);
-      const img = new Image();
-      img.src = url;
-    }
   }
 
-  function attach(petHitEl, { artChange, actionChange } = {}) {
+  function attach(petHitEl, { actionChange } = {}) {
     root = petHitEl;
     actor = petHitEl?.querySelector("#pet-actor");
     layerA = petHitEl?.querySelector("#pet-layer-a");
     layerB = petHitEl?.querySelector("#pet-layer-b");
-    if (typeof artChange === "function") onArtChange = artChange;
     if (typeof actionChange === "function") onActionChange = actionChange;
 
     if (!actor || !layerA || !layerB) return;
@@ -767,6 +759,7 @@ export function createMotionController(deps = {}) {
     layerA.classList.add("is-visible");
     layerB.classList.remove("is-visible");
     frontIsA = true;
+    lastActClass = "";
     applyCss(currentAction);
     enabled = true;
     paused = false;
@@ -781,6 +774,7 @@ export function createMotionController(deps = {}) {
     clearFrameTimer();
     clearChain();
     playingToken += 1;
+    lastActClass = "";
     root = null;
     actor = null;
     layerA = null;

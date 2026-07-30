@@ -30,7 +30,6 @@ let dockOpen = false;
 let dockStatsOpen = false;
 /**
  * Where the dock sits relative to Saya: below feet (default) or above head.
- * Chosen from free work-area space so the window can grow without shoving her.
  * @type {"above" | "below"}
  */
 let dockPlacement = "below";
@@ -38,8 +37,6 @@ let dockPlacement = "below";
 let mouseIgnoreActive = null;
 /**
  * Last known pointer position in window client coords.
- * Used when refreshMouseIgnore() is called without a sample point (e.g. after
- * pointerup) so we do not default to click-through while still over Saya.
  * @type {number | null}
  */
 let lastPointerClientX = null;
@@ -53,34 +50,11 @@ let stickyHitTimer = null;
 let windowChromeMode = "compact";
 /** Placement last sent with windowChromeMode (skip redundant setMode). */
 let lastChromePlacement = "";
+/** Coalesce hit-tests to one per animation frame. */
+let mouseIgnoreRaf = 0;
 
-const zoneTracker = createZoneTracker({
-  getBounds: () => window.petApi?.bounds?.() ?? Promise.resolve(null),
-  getWorkArea: () => window.petApi?.workArea?.() ?? Promise.resolve(null),
-  enabled: () => isZonePosesEnabled(),
-});
-
-const motion = createMotionController({
-  getZoneSnapshot: (opts) => zoneTracker.getSnapshot(opts),
-  getLastZoneId: () => zoneTracker.getZoneId(),
-  onZoneSit: (_zoneId) => {
-    // Quiet by default; occasional place-aware line only.
-    if (bubbleOpen || Math.random() >= 0.15) return;
-    const line = speak("zoneSit", { affinity: state.affinity });
-    currentLine = line.text;
-    openBubble(3500);
-    updateBubbleDom();
-  },
-});
-
-/**
- * Stage focus: no full settings panel; speech bubble + bottom shortcut dock.
- * Dock opens on right-click (replaces the old floating context menu).
- */
-const UI_MINIMAL = true;
-/** When true, dialogue bubble is rendered even in minimal stage mode. */
-const SHOW_BUBBLE = true;
 let bubbleOpen = false;
+/** @type {ReturnType<typeof setTimeout> | null} */
 let bubbleHideTimer = null;
 /**
  * Active pointer session on the pet.
@@ -102,9 +76,64 @@ let suppressClickUntil = 0;
 /** @type {null | (() => void)} */
 let pendingAfterDrag = null;
 
-function isPointerBlocked() {
-  return isDragging || pointerArmed || Date.now() < suppressClickUntil;
+/** Cached DOM nodes (refreshed on paint). */
+const dom = {
+  shell: /** @type {HTMLElement|null} */ (null),
+  bubble: /** @type {HTMLElement|null} */ (null),
+  lineText: /** @type {HTMLElement|null} */ (null),
+  bubbleRank: /** @type {HTMLElement|null} */ (null),
+  petHit: /** @type {HTMLElement|null} */ (null),
+  petActor: /** @type {HTMLElement|null} */ (null),
+  stage: /** @type {HTMLElement|null} */ (null),
+  dock: /** @type {HTMLElement|null} */ (null),
+  dockStats: /** @type {HTMLElement|null} */ (null),
+  dockStatsToggle: /** @type {HTMLElement|null} */ (null),
+  dockWanderToggle: /** @type {HTMLElement|null} */ (null),
+  affinityValue: /** @type {HTMLElement|null} */ (null),
+  affinityTitle: /** @type {HTMLElement|null} */ (null),
+  affinityBar: /** @type {HTMLElement|null} */ (null),
+  starsRow: /** @type {HTMLElement|null} */ (null),
+  statInteractions: /** @type {HTMLElement|null} */ (null),
+  statPeriod: /** @type {HTMLElement|null} */ (null),
+};
+
+function cacheDom() {
+  dom.shell = document.querySelector(".shell");
+  dom.bubble = document.querySelector("#bubble");
+  dom.lineText = document.querySelector("#line-text");
+  dom.bubbleRank = document.querySelector(".bubble-rank");
+  dom.petHit = document.querySelector("#pet-hit");
+  dom.petActor = document.querySelector("#pet-actor");
+  dom.stage = document.querySelector("#stage");
+  dom.dock = document.querySelector("#pet-dock");
+  dom.dockStats = document.querySelector("#dock-stats");
+  dom.dockStatsToggle = document.querySelector("#dock-stats-toggle");
+  dom.dockWanderToggle = document.querySelector("#dock-wander-toggle");
+  dom.affinityValue = document.querySelector(".affinity-value");
+  dom.affinityTitle = document.querySelector(".affinity-card .title");
+  dom.affinityBar = document.querySelector(".affinity-bar > i");
+  dom.starsRow = document.querySelector(".stars-row");
+  dom.statInteractions = document.querySelector("#stat-interactions");
+  dom.statPeriod = document.querySelector("#stat-period");
 }
+
+const zoneTracker = createZoneTracker({
+  getBounds: () => window.petApi?.bounds?.() ?? Promise.resolve(null),
+  getWorkArea: () => window.petApi?.workArea?.() ?? Promise.resolve(null),
+  enabled: () => isZonePosesEnabled(),
+});
+
+const motion = createMotionController({
+  getZoneSnapshot: (opts) => zoneTracker.getSnapshot(opts),
+  getLastZoneId: () => zoneTracker.getZoneId(),
+  onZoneSit: (_zoneId) => {
+    if (bubbleOpen || Math.random() >= 0.15) return;
+    const line = speak("zoneSit", { affinity: state.affinity });
+    currentLine = line.text;
+    openBubble(3500);
+    updateBubbleDom();
+  },
+});
 
 const wander = createWanderController({
   motion,
@@ -112,7 +141,6 @@ const wander = createWanderController({
   getBounds: () => window.petApi?.bounds?.() ?? Promise.resolve(null),
   getWorkArea: () => window.petApi?.workArea?.() ?? Promise.resolve(null),
   getRoamBias: (opts) => zoneTracker.getRoamBias(opts),
-  // Only real drag sessions block locomotion — not post-drag click suppress.
   isBlocked: () => isDragging || pointerArmed,
   onRoamStart: (_kind) => {
     if (Math.random() < 0.15 && !bubbleOpen) {
@@ -126,13 +154,12 @@ const wander = createWanderController({
 /**
  * After a real window drag: unpause without resuming pre-drag clip,
  * then play a single settle or idle (no double force-play).
- * @param {{ deferUi?: boolean }} [opts] deferUi=true when a post-drag UI callback will run
+ * @param {{ deferUi?: boolean }} [opts]
  */
 async function finishDragWithZone(opts = {}) {
   motion.setPaused?.(false, { skipResume: true });
   wander.resume();
 
-  // If deferred UI or dock owns the next beat, only restore idle once.
   if (opts.deferUi || dockOpen) {
     motion.play("idle", { force: true, fromIdle: true });
     return;
@@ -150,19 +177,16 @@ async function finishDragWithZone(opts = {}) {
     snap = null;
   }
 
-  // Post-await: user may have grabbed her again.
   if (isDragging || pointerArmed || motion.isPaused?.()) return;
 
-  if (snap?.zoneId) {
-    const actor = document.querySelector("#pet-actor");
-    if (actor) actor.dataset.zone = snap.zoneId;
+  if (snap?.zoneId && dom.petActor) {
+    dom.petActor.dataset.zone = snap.zoneId;
   }
 
   if (snap && Math.random() < 0.45) {
     const z = snap.zoneId || "";
     if ((z.startsWith("corner-b") || z === "edge-bottom") && Math.random() < 0.35) {
       motion.playBehavior("settleCorner", { force: true, holdMs: 3500 });
-      // Rare quiet place-aware line
       if (Math.random() < 0.15 && !bubbleOpen) {
         const line = speak("zoneSit", { affinity: state.affinity });
         currentLine = line.text;
@@ -178,7 +202,6 @@ async function finishDragWithZone(opts = {}) {
     }
   }
 
-  // Open area: soft multi-action settle or plain idle
   if (Math.random() < 0.4) {
     motion.playBehavior("settle", { force: true });
   } else {
@@ -188,13 +211,11 @@ async function finishDragWithZone(opts = {}) {
 
 function setDraggingLock(on) {
   window.petApi?.setDragging?.(Boolean(on));
-  // Dragging always needs a solid hit target under the cursor.
   if (on) applyMouseIgnore(false);
   else refreshMouseIgnore();
 }
 
 /**
- * Remember last pointer client position for hit-testing after pointerup.
  * @param {number} [x]
  * @param {number} [y]
  */
@@ -204,9 +225,6 @@ function notePointerClient(x, y) {
 }
 
 /**
- * Keep the window solid for a short period after pet interaction so continuous
- * clicks cannot race past setIgnoreMouseEvents into the desktop below.
- * When the sticky window ends, re-run hit-test (or passthrough if the cursor left).
  * @param {number} [ms]
  */
 function armStickyHit(ms = STICKY_HIT_MS) {
@@ -216,14 +234,12 @@ function armStickyHit(ms = STICKY_HIT_MS) {
   stickyHitTimer = setTimeout(() => {
     stickyHitTimer = null;
     if (isDragging || pointerArmed || dockOpen) return;
-    // If sticky was extended again, wait for the later timer.
     if (Date.now() < stickyHitUntil) return;
     refreshMouseIgnore(lastPointerClientX, lastPointerClientY);
   }, remain + 1);
 }
 
 /**
- * OS-level click-through: transparent chrome must not steal desktop clicks.
  * @param {boolean} ignore
  */
 function applyMouseIgnore(ignore) {
@@ -234,7 +250,6 @@ function applyMouseIgnore(ignore) {
 }
 
 /**
- * True when the element (or an ancestor) is a real interactive surface.
  * @param {Element | null} el
  */
 function isInteractiveTarget(el) {
@@ -246,9 +261,6 @@ function isInteractiveTarget(el) {
 }
 
 /**
- * Recompute mouse ignore from pointer position / UI state.
- * Without explicit coords, reuses the last known pointer sample instead of
- * blindly enabling passthrough (that was dropping rapid pet clicks through).
  * @param {number} [clientX]
  * @param {number} [clientY]
  */
@@ -265,7 +277,6 @@ function refreshMouseIgnore(clientX, clientY) {
     return;
   }
   if (clientX == null || clientY == null) {
-    // No sample point yet (boot / left window) — allow desktop passthrough.
     applyMouseIgnore(true);
     return;
   }
@@ -273,9 +284,18 @@ function refreshMouseIgnore(clientX, clientY) {
   applyMouseIgnore(!isInteractiveTarget(el));
 }
 
+/** Schedule hit-test at most once per frame (pointermove hot path). */
+function scheduleRefreshMouseIgnore(clientX, clientY) {
+  notePointerClient(clientX, clientY);
+  if (mouseIgnoreRaf) return;
+  mouseIgnoreRaf = requestAnimationFrame(() => {
+    mouseIgnoreRaf = 0;
+    if (isDragging || pointerArmed) return;
+    refreshMouseIgnore(lastPointerClientX, lastPointerClientY);
+  });
+}
+
 /**
- * Pick dock side from free work-area space around the current window.
- * Prefer below; use above when the bar would not fit under the feet.
  * @returns {Promise<"above" | "below">}
  */
 async function chooseDockPlacement() {
@@ -286,7 +306,6 @@ async function chooseDockPlacement() {
     ]);
     if (!bounds || !work) return "below";
 
-    // Extra height to grow when opening dock chrome (compact → dock / dockStats).
     const need = dockStatsOpen ? 250 : 140;
     const spaceBelow = work.y + work.height - (bounds.y + bounds.height);
     const spaceAbove = bounds.y - work.y;
@@ -299,23 +318,18 @@ async function chooseDockPlacement() {
   }
 }
 
-/**
- * Apply dock-above / dock-below classes on the shell so flex order places
- * the bar next to Saya without shifting her layout slot incorrectly.
- */
 function applyDockPlacementClass() {
-  const shell = document.querySelector(".shell");
+  const shell = dom.shell || document.querySelector(".shell");
   if (!shell) return;
   shell.classList.toggle("dock-placement-above", dockOpen && dockPlacement === "above");
   shell.classList.toggle("dock-placement-below", dockOpen && dockPlacement === "below");
 }
 
 /**
- * Desktop Y of the pet-hit bottom edge (feet line), for jump-free chrome resize.
  * @returns {Promise<number | null>}
  */
 async function measurePetFeetScreenY() {
-  const pet = document.querySelector("#pet-hit");
+  const pet = dom.petHit || document.querySelector("#pet-hit");
   if (!pet || !window.petApi?.bounds) return null;
   try {
     const bounds = await window.petApi.bounds();
@@ -327,13 +341,11 @@ async function measurePetFeetScreenY() {
 }
 
 /**
- * Nudge the window so pet feet return to a captured screen Y (sub-pixel / CSS slack).
  * @param {number | null | undefined} targetScreenY
  */
 async function correctPetFeetScreenY(targetScreenY) {
   if (targetScreenY == null || !Number.isFinite(targetScreenY)) return;
   if (!window.petApi?.moveBy) return;
-  // Wait one frame so flex layout reflects the new dock / window size.
   await new Promise((r) => requestAnimationFrame(() => r()));
   const now = await measurePetFeetScreenY();
   if (now == null) return;
@@ -342,21 +354,23 @@ async function correctPetFeetScreenY(targetScreenY) {
 }
 
 /**
- * Distance from the window client bottom to the pet-hit bottom (measured).
  * @returns {number | null}
  */
 function measureFeetFromBottomClient() {
-  const pet = document.querySelector("#pet-hit");
+  const pet = dom.petHit || document.querySelector("#pet-hit");
   if (!pet) return null;
   const bottom = pet.getBoundingClientRect().bottom;
   return Math.max(0, Math.round(window.innerHeight - bottom));
 }
 
+/** Apply compact/dock CSS mode classes on #app. */
+function setAppCssMode(cssMode) {
+  app.classList.remove("mode-compact", "mode-dock");
+  app.classList.add(`mode-${cssMode}`);
+}
+
 /**
  * Grow the OS window when bubble / dock need room; shrink back to body-only.
- * Main-process setMode keeps character *feet* fixed; dockPlacement chooses
- * whether chrome grows above or below so Saya does not jump.
- * Skips while dragging (main process locks size); call again after release.
  * @param {{ prevFeetFromBottom?: number, feetFromBottom?: number }} [feetOpts]
  * @returns {Promise<void>}
  */
@@ -368,12 +382,9 @@ async function syncWindowChrome(feetOpts = {}) {
   else if (dockOpen) next = "dock";
   else if (bubbleOpen) next = "speak";
 
-  // Keep CSS mode in sync so dock layout rules apply.
   const cssMode = dockOpen ? "dock" : "compact";
-  app.classList.remove("mode-compact", "mode-dock", "mode-panel");
-  app.classList.add(`mode-${cssMode}`);
+  setAppCssMode(cssMode);
   applyDockPlacementClass();
-  if (!UI_MINIMAL) state.mode = cssMode;
 
   const placementKey = dockOpen ? dockPlacement : "";
   const hasFeetOverride =
@@ -400,7 +411,6 @@ async function syncWindowChrome(feetOpts = {}) {
   await window.petApi?.setMode?.(next, Object.keys(opts).length ? opts : undefined);
 }
 
-// ---------- persistence helpers ----------
 function persist() {
   state.lastLine = currentLine;
   state.lastScene = currentScene;
@@ -408,62 +418,20 @@ function persist() {
 }
 
 /**
- * Queue UI that would resize the window until drag ends.
+ * Collapse dock / compact (used by tray force-compact path).
  */
-function runOrDeferWhileDragging(fn) {
-  if (isDragging || pointerArmed) {
-    pendingAfterDrag = fn;
+function collapseToCompact() {
+  if (dockOpen) {
+    void toggleDock(false);
     return;
   }
-  fn();
-}
-
-function setMode(mode, { repaint = true } = {}) {
-  // Minimal stage: no full panel; dock is toggled via toggleDock, not mode stack.
-  if (UI_MINIMAL) {
-    if (mode === "panel") mode = "compact";
-    if (mode === "dock") {
-      toggleDock(true);
-      return true;
-    }
-    if (mode === "compact") {
-      toggleDock(false);
-    }
-  }
-
-  if ((isDragging || pointerArmed) && mode !== state.mode) {
-    pendingAfterDrag = () => setMode(mode, { repaint });
-    return false;
-  }
-
-  const changed = state.mode !== mode;
-  if (!changed) {
-    app.classList.remove("mode-compact", "mode-dock", "mode-panel");
-    app.classList.add(`mode-${mode}`);
-    return false;
-  }
-
-  state.mode = mode;
-  app.classList.remove("mode-compact", "mode-dock", "mode-panel");
-  app.classList.add(`mode-${mode}`);
-  persist();
-  if (UI_MINIMAL) {
-    // Footprint is driven by bubble / dock chrome.
-    windowChromeMode = "";
-    syncWindowChrome();
-  } else {
-    window.petApi?.setMode?.(mode);
-  }
-  if (repaint) paint();
-  return true;
+  state.mode = "compact";
+  setAppCssMode("compact");
+  windowChromeMode = "";
+  syncWindowChrome();
 }
 
 function openBubble(ms = 8000) {
-  if (!SHOW_BUBBLE) {
-    bubbleOpen = false;
-    syncWindowChrome();
-    return;
-  }
   bubbleOpen = true;
   syncWindowChrome();
   if (bubbleHideTimer) clearTimeout(bubbleHideTimer);
@@ -474,22 +442,34 @@ function openBubble(ms = 8000) {
 }
 
 function updateBubbleDom() {
-  const bubble = document.querySelector("#bubble");
-  const line = document.querySelector("#line-text");
-  const rankEl = document.querySelector(".bubble-rank");
-  if (line) line.innerHTML = escapeHtml(currentLine);
-  if (rankEl) rankEl.textContent = getAffinityRank(state.affinity).title;
-  if (bubble) bubble.classList.toggle("closed", !bubbleOpen);
+  if (dom.lineText) dom.lineText.innerHTML = escapeHtml(currentLine);
+  if (dom.bubbleRank) dom.bubbleRank.textContent = getAffinityRank(state.affinity).title;
+  if (dom.bubble) dom.bubble.classList.toggle("closed", !bubbleOpen);
   syncWindowChrome();
 }
 
-function setArtStyle(_art) {
-  state.artStyle = "body";
-  const shell = document.querySelector(".shell");
-  if (shell) {
-    shell.classList.remove("art-q", "art-normal", "art-orb");
-    shell.classList.add("art-body");
-  }
+/**
+ * Apply affinity gain and optional milestone line append.
+ * @param {number} amount
+ * @returns {{ before: number, gained: boolean }}
+ */
+function applyAffinityGain(amount) {
+  const before = state.affinity;
+  state = gainAffinity(state, amount);
+  const gained = Boolean(state._affinityGained && state.affinity > before);
+  delete state._affinityGained;
+  return { before, gained };
+}
+
+/**
+ * Append affinity-up milestone line when crossing a 20-point boundary.
+ * @param {number} before
+ * @param {boolean} gained
+ */
+function maybeAppendAffinityMilestone(before, gained) {
+  if (!gained || state.affinity % 20 !== 0) return;
+  const extra = speak("affinityUp", { affinity: state.affinity });
+  currentLine = `${currentLine}\n${extra.text}`;
 }
 
 function say(scene, { affinityGain = 0 } = {}) {
@@ -498,62 +478,44 @@ function say(scene, { affinityGain = 0 } = {}) {
   currentLine = line.text;
 
   if (affinityGain > 0) {
-    const before = state.affinity;
-    state = gainAffinity(state, affinityGain);
-    if (state._affinityGained && state.affinity > before && state.affinity % 20 === 0) {
-      const extra = speak("affinityUp", { affinity: state.affinity });
-      currentLine = `${currentLine}\n${extra.text}`;
-    }
-    delete state._affinityGained;
+    const { before, gained } = applyAffinityGain(affinityGain);
+    maybeAppendAffinityMilestone(before, gained);
   }
 
-  setArtStyle("body");
   openBubble(9000);
   persist();
-
-  if (document.querySelector("#pet-actor")) {
-    updateBubbleDom();
-    updateAffinityDom();
-    motion.playScene(scene);
-  } else {
-    paint();
-    motion.playScene(scene);
-  }
-
+  updateBubbleDom();
+  updateAffinityDom();
+  motion.playScene(scene);
   return line;
 }
 
 const TIME_BUCKET_LABELS = {
-  morning: "清晨",
-  noon: "正午",
-  afternoon: "午后",
-  evening: "傍晚",
-  night: "夜晚",
   lateNight: "深夜",
+  dawn: "清晨",
+  morning: "早晨",
+  forenoon: "上午",
+  noon: "正午",
+  afternoon: "下午",
+  evening: "傍晚",
+  earlyNight: "晚上",
+  night: "夜晚",
 };
 
 function updateAffinityDom() {
   const rank = getAffinityRank(state.affinity);
-  const valueEl = document.querySelector(".affinity-value");
-  const titleEl = document.querySelector(".affinity-card .title");
-  const bar = document.querySelector(".affinity-bar > i");
-  const stars = document.querySelector(".stars-row");
-  const total = document.querySelector("#stat-interactions");
-  const periodEl = document.querySelector("#stat-period");
-  if (valueEl) valueEl.textContent = String(rank.value);
-  if (titleEl) titleEl.textContent = rank.title;
-  if (bar) bar.style.width = `${rank.value}%`;
-  if (stars) stars.textContent = starsHtml(rank.stars);
-  if (total) total.textContent = String(state.totalInteractions || 0);
-  if (periodEl) {
-    const bucket = timeBucket();
-    periodEl.textContent = TIME_BUCKET_LABELS[bucket] || "此刻";
+  if (dom.affinityValue) dom.affinityValue.textContent = String(rank.value);
+  if (dom.affinityTitle) dom.affinityTitle.textContent = rank.title;
+  if (dom.affinityBar) dom.affinityBar.style.width = `${rank.value}%`;
+  if (dom.starsRow) dom.starsRow.textContent = starsHtml(rank.stars);
+  if (dom.statInteractions) dom.statInteractions.textContent = String(state.totalInteractions || 0);
+  if (dom.statPeriod) {
+    dom.statPeriod.textContent = TIME_BUCKET_LABELS[timeBucket()] || "此刻";
   }
 }
 
-// ---------- particles helper ----------
 function spawnParticles(x, y, symbol = "✨") {
-  const stage = document.querySelector("#stage");
+  const stage = dom.stage || document.querySelector("#stage");
   if (!stage) return;
   for (let i = 0; i < 5; i++) {
     const p = document.createElement("span");
@@ -570,22 +532,17 @@ function spawnParticles(x, y, symbol = "✨") {
   }
 }
 
-// ---------- shortcut dock (above / below character) ----------
 /**
- * Show / hide the action dock (right-click).
- * Opens beside Saya (below by default, above near the bottom edge) without
- * moving her screen position — window grows around her feet.
  * @param {boolean} show
  * @param {{ clientX?: number, clientY?: number }} [pointer]
  * @returns {Promise<void>}
  */
 async function toggleDock(show, pointer = {}) {
-  const dock = document.querySelector("#pet-dock");
+  const dock = dom.dock || document.querySelector("#pet-dock");
   if (!dock) return;
   const willOpen = Boolean(show);
 
   if (!willOpen) {
-    // Capture feet before chrome collapses so close does not drop her.
     const feetY = await measurePetFeetScreenY();
     const prevFeet = measureFeetFromBottomClient();
     dockOpen = false;
@@ -602,7 +559,6 @@ async function toggleDock(show, pointer = {}) {
   }
 
   if (dockOpen) {
-    // Already open — keep current side; still ensure chrome is applied.
     dock.classList.remove("closed");
     applyDockPlacementClass();
     applyMouseIgnore(false);
@@ -611,11 +567,9 @@ async function toggleDock(show, pointer = {}) {
     return;
   }
 
-  // Feet screen Y before any layout change — gold standard for no-jump open.
   const feetY = await measurePetFeetScreenY();
   const prevFeet = measureFeetFromBottomClient();
 
-  // Resolve side first so setMode grows the correct direction.
   dockPlacement = await chooseDockPlacement();
   dockOpen = true;
   applyDockPlacementClass();
@@ -624,19 +578,15 @@ async function toggleDock(show, pointer = {}) {
   const feetOpts = {};
   if (prevFeet != null) feetOpts.prevFeetFromBottom = prevFeet;
   if (dockPlacement === "below") {
-    // Only real bar height under feet — not window slack (see main DOCK_BELOW_CHROME).
     const estChrome = dockStatsOpen ? 244 : 94;
     feetOpts.feetFromBottom = (prevFeet ?? 20) + estChrome;
   } else if (prevFeet != null) {
-    // Dock above: feet stay at the bottom of the stack.
     feetOpts.feetFromBottom = prevFeet;
   }
 
-  // Resize first (dock still closed) so the bar does not flash in a tiny window.
   await syncWindowChrome(feetOpts);
   dock.classList.remove("closed");
   applyDockPlacementClass();
-  // Pixel-snap after flex layout — fixes any residual below-dock jump.
   await correctPetFeetScreenY(feetY);
   applyMouseIgnore(false);
   updateDockWanderText();
@@ -644,13 +594,11 @@ async function toggleDock(show, pointer = {}) {
 }
 
 /**
- * Toggle secondary stats submenu (affinity / interactions / period).
  * @param {boolean} [show]
  * @returns {Promise<void>}
  */
 async function toggleDockStats(show = !dockStatsOpen) {
   if (!dockOpen && show) {
-    // Ensure primary dock is visible first (await side + resize).
     await toggleDock(true);
   }
   const willShow = Boolean(show) && dockOpen;
@@ -668,7 +616,6 @@ async function toggleDockStats(show = !dockStatsOpen) {
   if (prevFeet != null) feetOpts.prevFeetFromBottom = prevFeet;
   if (dockPlacement === "below") {
     const estChrome = dockStatsOpen ? 244 : 94;
-    // Swap under-feet chrome: remove old estimate, add new (prevFeet already includes old bar).
     const oldChrome = dockStatsOpen ? 94 : 244;
     feetOpts.feetFromBottom = (prevFeet ?? 20) - oldChrome + estChrome;
     if (feetOpts.feetFromBottom < 20) feetOpts.feetFromBottom = 20 + estChrome;
@@ -676,7 +623,6 @@ async function toggleDockStats(show = !dockStatsOpen) {
     feetOpts.feetFromBottom = prevFeet;
   }
 
-  // dock ↔ dockStats always resizes; clear skip keys.
   windowChromeMode = "";
   lastChromePlacement = "";
   await syncWindowChrome(feetOpts);
@@ -687,8 +633,8 @@ async function toggleDockStats(show = !dockStatsOpen) {
 }
 
 function updateDockStatsPanel() {
-  const panel = document.querySelector("#dock-stats");
-  const toggleBtn = document.querySelector("#dock-stats-toggle");
+  const panel = dom.dockStats || document.querySelector("#dock-stats");
+  const toggleBtn = dom.dockStatsToggle || document.querySelector("#dock-stats-toggle");
   if (panel) {
     panel.classList.toggle("closed", !dockStatsOpen);
     panel.setAttribute("aria-hidden", dockStatsOpen ? "false" : "true");
@@ -703,7 +649,7 @@ function updateDockStatsPanel() {
 }
 
 function updateDockWanderText() {
-  const toggleBtn = document.querySelector("#dock-wander-toggle");
+  const toggleBtn = dom.dockWanderToggle || document.querySelector("#dock-wander-toggle");
   if (!toggleBtn) return;
   const on = autoWanderEnabled;
   toggleBtn.classList.toggle("is-on", on);
@@ -713,6 +659,34 @@ function updateDockWanderText() {
   if (lbl) lbl.textContent = on ? "漫游" : "定住";
   toggleBtn.setAttribute("aria-pressed", on ? "true" : "false");
   toggleBtn.title = on ? "漫游：开启（点击关闭）" : "漫游：关闭（点击开启）";
+}
+
+/**
+ * Speak a custom or scene line with optional affinity, bubble, and DOM refresh.
+ * @param {{ scene?: string, text?: string, affinityGain?: number, bubbleMs?: number }} opts
+ */
+function speakAndShow(opts) {
+  const gain = opts.affinityGain ?? 0;
+  let before = state.affinity;
+  let gained = false;
+  if (gain > 0) {
+    ({ before, gained } = applyAffinityGain(gain));
+  }
+
+  if (opts.scene) {
+    const line = speak(opts.scene, { affinity: state.affinity });
+    currentScene = opts.scene === "menuSit" || opts.scene === "menuPose" ? "talk" : opts.scene;
+    currentLine = line.text;
+  } else {
+    currentScene = "talk";
+    currentLine = opts.text || "";
+  }
+
+  maybeAppendAffinityMilestone(before, gained);
+  openBubble(opts.bubbleMs ?? 5000);
+  updateBubbleDom();
+  if (gain > 0) updateAffinityDom();
+  persist();
 }
 
 async function handleDockAction(action) {
@@ -731,21 +705,11 @@ async function handleDockAction(action) {
       spawnParticles(70, 90, "💖");
       break;
     case "walk": {
-      // User-initiated: force walk even if auto-roam is off or she was sleeping.
-      const before = state.affinity;
-      state = gainAffinity(state, 1);
-      delete state._affinityGained;
-      currentScene = "talk";
-      currentLine = "要在桌面上走走吗？好的~";
-      openBubble(4000);
-      updateBubbleDom();
-      if (state.affinity > before && state.affinity % 20 === 0) {
-        const extra = speak("affinityUp", { affinity: state.affinity });
-        currentLine = `${currentLine}\n${extra.text}`;
-        updateBubbleDom();
-      }
-      persist();
-      updateAffinityDom();
+      speakAndShow({
+        text: "要在桌面上走走吗？好的~",
+        affinityGain: 1,
+        bubbleMs: 4000,
+      });
       const ok = await wander.planWalk({ force: true });
       if (!ok) {
         currentLine = "等我一下，现在好像走不开…再试一次好吗？";
@@ -755,49 +719,20 @@ async function handleDockAction(action) {
       break;
     }
     case "hop": {
-      // Multi-action hop variants (hop → smile / bounce → hop …)
       motion.lockFor(2800);
       motion.playBehavior("menuHop", { force: true });
       spawnParticles(70, 90, "✨");
       break;
     }
     case "sit": {
-      // lock → affinity/line → multi-action rest chain (stretch→sit / crouch / lie …)
       motion.lockFor(6000);
-      const before = state.affinity;
-      state = gainAffinity(state, 1);
-      delete state._affinityGained;
-      const line = speak("menuSit", { affinity: state.affinity });
-      currentScene = "talk";
-      currentLine = line.text;
-      if (state.affinity > before && state.affinity % 20 === 0) {
-        const extra = speak("affinityUp", { affinity: state.affinity });
-        currentLine = `${currentLine}\n${extra.text}`;
-      }
-      openBubble(5000);
-      updateBubbleDom();
-      updateAffinityDom();
-      persist();
+      speakAndShow({ scene: "menuSit", affinityGain: 1, bubbleMs: 5000 });
       motion.playBehavior("menuSit", { force: true, holdMs: 6000 });
       break;
     }
     case "pose": {
-      // 主动换低位姿势：蹲 / 趴 / 躺
       motion.lockFor(5800);
-      const beforePose = state.affinity;
-      state = gainAffinity(state, 1);
-      delete state._affinityGained;
-      const poseLine = speak("menuPose", { affinity: state.affinity });
-      currentScene = "talk";
-      currentLine = poseLine.text;
-      if (state.affinity > beforePose && state.affinity % 20 === 0) {
-        const extra = speak("affinityUp", { affinity: state.affinity });
-        currentLine = `${currentLine}\n${extra.text}`;
-      }
-      openBubble(4800);
-      updateBubbleDom();
-      updateAffinityDom();
-      persist();
+      speakAndShow({ scene: "menuPose", affinityGain: 1, bubbleMs: 4800 });
       motion.playBehavior("menuPose", { force: true, holdMs: 5800 });
       break;
     }
@@ -805,16 +740,16 @@ async function handleDockAction(action) {
       autoWanderEnabled = !autoWanderEnabled;
       if (autoWanderEnabled) {
         wander.start();
-        currentScene = "talk";
-        currentLine = "嗯，漫游开启啦！我会偶尔在桌面上走走。";
-        openBubble(4000);
-        updateBubbleDom();
+        speakAndShow({
+          text: "嗯，漫游开启啦！我会偶尔在桌面上走走。",
+          bubbleMs: 4000,
+        });
       } else {
         wander.stop();
-        currentScene = "talk";
-        currentLine = "漫游关闭了。我就站在这里陪着你。";
-        openBubble(4000);
-        updateBubbleDom();
+        speakAndShow({
+          text: "漫游关闭了。我就站在这里陪着你。",
+          bubbleMs: 4000,
+        });
       }
       updateDockWanderText();
       break;
@@ -827,7 +762,6 @@ async function handleDockAction(action) {
   }
 }
 
-// ---------- render ----------
 function starsHtml(count) {
   return "★".repeat(count) + "☆".repeat(Math.max(0, 6 - count));
 }
@@ -839,7 +773,6 @@ function shellHtml() {
   const statsClass = dockStatsOpen ? "dock-sub" : "dock-sub closed";
   const wanderOn = autoWanderEnabled;
   const periodLabel = TIME_BUCKET_LABELS[timeBucket()] || "此刻";
-  // Primary dock: actions only. Affinity lives in a secondary submenu (星轨).
   const placementClass = !dockOpen
     ? ""
     : dockPlacement === "above"
@@ -978,22 +911,24 @@ function escapeHtml(str) {
 function paintStars() {
   const host = document.querySelector("#stars");
   if (!host || host.childElementCount) return;
-  const count = 14;
-  for (let i = 0; i < count; i++) {
+  const frag = document.createDocumentFragment();
+  for (let i = 0; i < 14; i++) {
     const s = document.createElement("span");
     s.className = "star";
     s.style.left = `${8 + Math.random() * 84}%`;
     s.style.top = `${6 + Math.random() * 70}%`;
     s.style.setProperty("--dur", `${2.4 + Math.random() * 3}s`);
     s.style.setProperty("--delay", `${Math.random() * 2}s`);
-    host.appendChild(s);
+    frag.appendChild(s);
   }
+  host.appendChild(frag);
 }
 
 function bind() {
-  const pet = document.querySelector("#pet-hit");
-  const bubble = document.querySelector("#bubble");
-  const dock = document.querySelector("#pet-dock");
+  cacheDom();
+  const pet = dom.petHit;
+  const bubble = dom.bubble;
+  const dock = dom.dock;
 
   if (bubble) {
     bubble.addEventListener("click", (e) => {
@@ -1004,22 +939,17 @@ function bind() {
   }
 
   if (dock) {
-    dock.addEventListener("pointerdown", (e) => {
-      e.stopPropagation();
-    });
-
-    dock.addEventListener("pointerup", (e) => {
-      e.stopPropagation();
-    });
-
+    dock.addEventListener("pointerdown", (e) => e.stopPropagation());
+    dock.addEventListener("pointerup", (e) => e.stopPropagation());
     dock.addEventListener("click", async (e) => {
-      const btn = e.target.closest("[data-dock-action]");
+      const btn = e.target.closest?.("[data-dock-action]");
       if (!btn) return;
       e.stopPropagation();
       const act = btn.getAttribute("data-dock-action");
-      // Keep dock open for multi-actions; hide still closes via window hide.
-      if (act === "hide") toggleDock(false);
       await handleDockAction(act);
+      if (act !== "stats" && act !== "stats-close") {
+        await toggleDock(false, { clientX: e.clientX, clientY: e.clientY });
+      }
     });
   }
 
@@ -1036,7 +966,6 @@ function bind() {
       const hadPointer = Boolean(session || isDragging || pointerArmed);
 
       notePointerClient(pointer.clientX, pointer.clientY);
-      // Hold solid hit-testing across rapid multi-clicks / post-drag settle.
       if (hadPointer) armStickyHit();
 
       drag = null;
@@ -1061,7 +990,6 @@ function bind() {
               if (!isDragging && !pointerArmed) {
                 deferred();
                 syncWindowChrome();
-                // Re-arm: async settle may outlast the first sticky window.
                 armStickyHit();
                 refreshMouseIgnore(lastPointerClientX, lastPointerClientY);
               }
@@ -1077,7 +1005,6 @@ function bind() {
         return true;
       }
 
-      // Click (no real drag): default unpause/resume path (usually never paused).
       motion.setPaused?.(false);
       wander.resume();
       pendingAfterDrag = null;
@@ -1090,11 +1017,9 @@ function bind() {
       if (event.button !== 0) return;
       if (isDockEvent(event)) return;
       notePointerClient(event.clientX, event.clientY);
-      // Solid hit immediately — never let a follow-up click race into passthrough.
       pointerArmed = true;
       armStickyHit();
       applyMouseIgnore(false);
-      // Drag / click on body closes the shortcut bar so it does not steal space.
       if (dockOpen) toggleDock(false, { clientX: event.clientX, clientY: event.clientY });
       isDragging = false;
       pendingAfterDrag = null;
@@ -1177,7 +1102,6 @@ function bind() {
       event.preventDefault();
       event.stopPropagation();
       if (isDragging) return;
-      // Right-click toggles the bottom shortcut dock (replaces old context menu).
       toggleDock(!dockOpen, { clientX: event.clientX, clientY: event.clientY });
     });
 
@@ -1189,15 +1113,15 @@ function bind() {
       const scene = Math.random() < 0.5 ? "affinityUp" : "praise";
       say(scene, { affinityGain: 2 });
       const rect = pet.getBoundingClientRect();
-      spawnParticles(event.clientX - rect.left, event.clientY - rect.top, Math.random() < 0.5 ? "💖" : "✨");
+      spawnParticles(
+        event.clientX - rect.left,
+        event.clientY - rect.top,
+        Math.random() < 0.5 ? "💖" : "✨",
+      );
     });
   }
 
   motion.attach(pet, {
-    artChange: (art) => {
-      if (isDragging) return;
-      setArtStyle(art);
-    },
     actionChange: (actionId, meta) => {
       wander.onAction(actionId, meta);
     },
@@ -1207,26 +1131,23 @@ function bind() {
   refreshMouseIgnore();
 }
 
-/** Forwarded mousemove while click-through is active — re-hit-test interactive surfaces. */
 document.addEventListener(
   "pointermove",
   (e) => {
-    notePointerClient(e.clientX, e.clientY);
-    if (isDragging || pointerArmed) return;
-    refreshMouseIgnore(e.clientX, e.clientY);
+    if (isDragging || pointerArmed) {
+      notePointerClient(e.clientX, e.clientY);
+      return;
+    }
+    scheduleRefreshMouseIgnore(e.clientX, e.clientY);
   },
   { passive: true, capture: true },
 );
 
 document.addEventListener("pointerleave", () => {
   if (isDragging || pointerArmed || dockOpen) return;
-  // Drop the sample so post-sticky refresh does not keep a stale "over pet" hit.
   lastPointerClientX = null;
   lastPointerClientY = null;
-  if (Date.now() < stickyHitUntil) {
-    // Stay solid through the multi-click burst; timer will open passthrough after.
-    return;
-  }
+  if (Date.now() < stickyHitUntil) return;
   applyMouseIgnore(true);
 });
 
@@ -1238,10 +1159,8 @@ document.addEventListener("click", (e) => {
 
 function paint() {
   motion.detach();
-  if (UI_MINIMAL && !dockOpen) state.mode = "compact";
-  const cssMode = dockOpen ? "dock" : state.mode === "dock" ? "dock" : "compact";
-  app.classList.remove("mode-compact", "mode-dock", "mode-panel");
-  app.classList.add(`mode-${cssMode}`);
+  if (!dockOpen) state.mode = "compact";
+  setAppCssMode(dockOpen ? "dock" : "compact");
   app.innerHTML = shellHtml();
   bind();
   updateDockWanderText();
@@ -1249,7 +1168,6 @@ function paint() {
   updateAffinityDom();
 }
 
-// ---------- boot ----------
 function boot() {
   state.mode = "compact";
   bubbleOpen = false;
@@ -1261,14 +1179,12 @@ function boot() {
   });
   currentScene = line.scene;
   currentLine = line.text;
-  state.artStyle = "body";
   openBubble(10000);
   persist();
   zoneTracker.start();
   paint();
   motion.playScene(currentScene);
   wander.start();
-  // openBubble already requested speak size; force-assert after first paint.
   windowChromeMode = "";
   syncWindowChrome();
   applyMouseIgnore(true);
@@ -1282,49 +1198,40 @@ function boot() {
         dockStatsOpen = mode === "dockStats";
         lastChromePlacement = dockPlacement;
         document.querySelector("#pet-dock")?.classList.remove("closed");
-        app.classList.remove("mode-compact", "mode-dock", "mode-panel");
-        app.classList.add("mode-dock");
+        setAppCssMode("dock");
         applyDockPlacementClass();
         updateDockStatsPanel();
       } else if (mode === "compact" && dockOpen) {
-        // Main/tray forced compact — collapse dock chrome in renderer too.
         dockOpen = false;
         dockStatsOpen = false;
         lastChromePlacement = "";
         document.querySelector("#pet-dock")?.classList.add("closed");
-        app.classList.remove("mode-compact", "mode-dock", "mode-panel");
-        app.classList.add("mode-compact");
+        setAppCssMode("compact");
         applyDockPlacementClass();
         updateDockStatsPanel();
       }
       return;
     }
-    if (UI_MINIMAL) {
-      setMode("compact", { repaint: false });
-      return;
-    }
-    state.mode = mode;
-    paint();
+    collapseToCompact();
   });
 }
 
 window.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
-    if (dockStatsOpen) {
-      toggleDockStats(false);
-      return;
-    }
-    if (dockOpen) {
-      toggleDock(false);
-      return;
-    }
-    if (bubbleOpen) {
-      bubbleOpen = false;
-      updateBubbleDom();
-      return;
-    }
-    window.petApi?.hide?.();
+  if (event.key !== "Escape") return;
+  if (dockStatsOpen) {
+    toggleDockStats(false);
+    return;
   }
+  if (dockOpen) {
+    toggleDock(false);
+    return;
+  }
+  if (bubbleOpen) {
+    bubbleOpen = false;
+    updateBubbleDom();
+    return;
+  }
+  window.petApi?.hide?.();
 });
 
 boot();

@@ -6,7 +6,6 @@ import {
   Tray,
   nativeImage,
   screen,
-  Notification,
 } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,7 +40,6 @@ const WINDOW_MODES = {
   dock: { width: 280, height: 320 },
   // Dock + secondary stats submenu (affinity / counts)
   dockStats: { width: 288, height: 440 },
-  panel: { width: 340, height: 520 },
 };
 
 /**
@@ -236,13 +234,9 @@ function setMode(
     feetFromBottom: nextFeetOverride,
   } = {},
 ) {
-  // Full settings panel still unused — keep window compact if asked for panel.
-  if (mode === "panel") {
-    mode = "compact";
-  }
-  // Legacy alias: floating context menu used speak-sized chrome.
-  if (mode === "menu") {
-    mode = "speak";
+  // Legacy aliases
+  if (mode === "panel" || mode === "menu") {
+    mode = mode === "menu" ? "speak" : "compact";
   }
   if (!mainWindow || !WINDOW_MODES[mode]) return null;
 
@@ -478,32 +472,11 @@ app.whenReady().then(() => {
     mainWindow?.hide();
   });
 
-  ipcMain.handle("pet:move", (_e, position) => {
-    if (!mainWindow) return null;
-    const x = Number(position?.x);
-    const y = Number(position?.y);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-
-    const size = modeSize();
-    const next = clampToWorkArea(Math.round(x), Math.round(y), size.width, size.height);
-    if (!Number.isFinite(next.x) || !Number.isFinite(next.y)) return null;
-
-    const bounds = { x: next.x, y: next.y, width: size.width, height: size.height };
-    mainWindow.setBounds(bounds, false);
-    savePersistedBounds(bounds, { immediate: true });
-    return bounds;
-  });
-
   /** Relative move — fire-and-forget path preferred for drag smoothness. */
-  ipcMain.handle("pet:move-by", (_e, delta) =>
-    moveWindowBy(Number(delta?.dx), Number(delta?.dy)),
-  );
-
   ipcMain.on("pet:move-by", (_e, delta) => {
     moveWindowBy(Number(delta?.dx), Number(delta?.dy));
   });
 
-  ipcMain.handle("pet:set-dragging", (_e, dragging) => setWindowDragging(dragging));
   ipcMain.on("pet:set-dragging", (_e, dragging) => {
     setWindowDragging(dragging);
   });
@@ -536,27 +509,6 @@ app.whenReady().then(() => {
     } else {
       mainWindow.setIgnoreMouseEvents(false);
     }
-  });
-
-  ipcMain.handle("pet:notify", (_e, payload) => {
-    if (!Notification.isSupported()) return false;
-    const n = new Notification({
-      title: payload?.title || "天之川沙夜",
-      body: payload?.body || "",
-      silent: Boolean(payload?.silent),
-      ...(APP_ICON_PATH ? { icon: APP_ICON_PATH } : {}),
-    });
-    n.on("click", () => {
-      mainWindow?.show();
-      mainWindow?.focus();
-    });
-    n.show();
-    return true;
-  });
-
-  ipcMain.handle("pet:get-path", (_e, name) => {
-    if (name === "userData") return app.getPath("userData");
-    return null;
   });
 });
 

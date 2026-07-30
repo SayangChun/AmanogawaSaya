@@ -23,7 +23,6 @@ export const CHARACTER = {
   },
   /**
    * 全身立绘默认帧（VPet 帧动画见 assets/animations/ + anim-manifest.js）。
-   * default.png = 冬制服站立透明底；动作由帧序列驱动。
    */
   bodies: {
     default: "./assets/animations/default.png",
@@ -34,22 +33,6 @@ export const CHARACTER = {
     excite: "./assets/animations/celebrate/01.png",
     happy: "./assets/animations/smile/01.png",
   },
-  /**
-   * 面部差分（备用；主显示走 bodies，亦锁定冬制服脸）
-   */
-  faces: {
-    default: "./assets/faces/default.png",
-    calm: "./assets/faces/default.png",
-    happy: "./assets/faces/default.png",
-    soft: "./assets/faces/default.png",
-    coat: "./assets/faces/default.png",
-    excite: "./assets/faces/default.png",
-  },
-  /** @deprecated use bodies */
-  get portraits() {
-    return this.bodies;
-  },
-  qScenes: ["praise", "tap", "affinityUp"],
 };
 
 export const AFFINITY_RANKS = [

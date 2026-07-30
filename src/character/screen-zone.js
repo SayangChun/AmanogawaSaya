@@ -10,7 +10,7 @@ export const ZONE_CONFIG = {
   EXIT_EDGE_PX: 110,
   MIN_ZONE_DWELL_MS: 2500,
   SNAPSHOT_FRESH_MS: 1000,
-  IPC_TIMEOUT_MS: 50,
+  IPC_TIMEOUT_MS: 80,
   BOOT_ZONE_GRACE_MS: 8 * 60 * 1000,
   BOOT_OPEN_BLEND: 0.45,
   WALK_MS_CORNER_SCALE: 0.8,
@@ -672,7 +672,9 @@ export function createZoneTracker(deps) {
   async function getRoamBias(opts = {}) {
     const snap = await Promise.resolve(getSnapshot(opts));
     if (!snap) {
-      return { roamChanceMul: 1, walkVsHop: 0.82, preferDir: null, zoneId: null };
+      // Match open-zone / wander defaults — avoid accidental walk spam when
+      // IPC snapshot is cold or timed out.
+      return { roamChanceMul: 1, walkVsHop: 0.35, preferDir: null, zoneId: null };
     }
     return { ...snap.roam, zoneId: snap.zoneId };
   }

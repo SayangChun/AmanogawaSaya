@@ -2,19 +2,15 @@ const STORAGE_KEY = "amanogawa.saya.pet.v3";
 
 export const DEFAULT_STATE = {
   version: 3,
-  mode: "compact", // compact | dock | panel
+  mode: "compact", // compact | dock
   affinity: 12,
   totalInteractions: 0,
   lastScene: "boot",
   lastLine: "",
-  /** visual: full-body VPet */
-  artStyle: "body",
-  muted: false,
 };
 
 export function loadState() {
   try {
-    // migrate from older keys if present
     let raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
       raw = localStorage.getItem("amanogawa.saya.pet.v2");
@@ -27,9 +23,7 @@ export function loadState() {
       totalInteractions: Number(parsed.totalInteractions) || 0,
       lastScene: parsed.lastScene || DEFAULT_STATE.lastScene,
       lastLine: parsed.lastLine || "",
-      mode: ["compact", "dock", "panel"].includes(parsed.mode) ? parsed.mode : "compact",
-      artStyle: "body",
-      muted: Boolean(parsed.muted),
+      mode: ["compact", "dock"].includes(parsed.mode) ? parsed.mode : "compact",
       version: 3,
     };
   } catch {
@@ -41,13 +35,11 @@ export function saveState(state) {
   try {
     const slim = {
       version: 3,
-      mode: state.mode,
+      mode: state.mode === "dock" ? "dock" : "compact",
       affinity: state.affinity,
       totalInteractions: state.totalInteractions || 0,
       lastScene: state.lastScene || "",
       lastLine: state.lastLine || "",
-      artStyle: "body",
-      muted: Boolean(state.muted),
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(slim));
   } catch {

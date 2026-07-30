@@ -3,7 +3,6 @@ import { contextBridge, ipcRenderer } from "electron";
 contextBridge.exposeInMainWorld("petApi", {
   focus: () => ipcRenderer.invoke("pet:focus"),
   hide: () => ipcRenderer.invoke("pet:hide"),
-  move: (position) => ipcRenderer.invoke("pet:move", position),
   /** Fire-and-forget relative move — avoids invoke backlog mid-drag. */
   moveBy: (delta) => {
     ipcRenderer.send("pet:move-by", delta);
@@ -29,8 +28,6 @@ contextBridge.exposeInMainWorld("petApi", {
       forward: options?.forward !== false,
     });
   },
-  notify: (payload) => ipcRenderer.invoke("pet:notify", payload),
-  getPath: (name) => ipcRenderer.invoke("pet:get-path", name),
   onSetMode: (handler) => {
     const listener = (_event, mode) => handler(mode);
     ipcRenderer.on("pet:set-mode", listener);
