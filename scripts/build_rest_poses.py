@@ -97,21 +97,21 @@ def main() -> None:
             "frames": save_seq("crouch", crouch_frames),
             "fps": 2.5,
             "loop": False,
-            "duration": 4800,
+            "duration": 12000,
             "holdLast": True,
         },
         "lie": {
             "frames": save_seq("lie", lie_frames),
             "fps": 2,
             "loop": False,
-            "duration": 5600,
+            "duration": 16000,
             "holdLast": True,
         },
         "prone": {
             "frames": save_seq("prone", prone_frames),
             "fps": 2.2,
             "loop": False,
-            "duration": 5200,
+            "duration": 14000,
             "holdLast": True,
         },
     }
@@ -134,7 +134,7 @@ def main() -> None:
         ],
         "fps": 2.2,
         "loop": False,
-        "duration": 5200,
+        "duration": 14000,
         "holdLast": True,
     }
 

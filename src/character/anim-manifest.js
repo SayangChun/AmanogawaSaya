@@ -100,7 +100,7 @@ export const ANIM_MANIFEST = {
       ],
       "fps": 2.5,
       "loop": false,
-      "duration": 4800,
+      "duration": 14000,
       "holdLast": true
     },
     "stretch": {
@@ -360,7 +360,7 @@ export const ANIM_MANIFEST = {
       ],
       "fps": 2.2,
       "loop": false,
-      "duration": 5200,
+      "duration": 14000,
       "holdLast": true
     },
     "crouch": {
@@ -373,7 +373,7 @@ export const ANIM_MANIFEST = {
       ],
       "fps": 2.5,
       "loop": false,
-      "duration": 4800,
+      "duration": 12000,
       "holdLast": true
     },
     "lie": {
@@ -386,7 +386,7 @@ export const ANIM_MANIFEST = {
       ],
       "fps": 2,
       "loop": false,
-      "duration": 5600,
+      "duration": 16000,
       "holdLast": true
     },
     "prone": {
@@ -398,7 +398,7 @@ export const ANIM_MANIFEST = {
       ],
       "fps": 2.2,
       "loop": false,
-      "duration": 5200,
+      "duration": 14000,
       "holdLast": true
     }
   }

@@ -99,7 +99,7 @@
       ],
       "fps": 2.5,
       "loop": false,
-      "duration": 4800,
+      "duration": 14000,
       "holdLast": true
     },
     "stretch": {
@@ -359,7 +359,7 @@
       ],
       "fps": 2.2,
       "loop": false,
-      "duration": 5200,
+      "duration": 14000,
       "holdLast": true
     },
     "crouch": {
@@ -372,7 +372,7 @@
       ],
       "fps": 2.5,
       "loop": false,
-      "duration": 4800,
+      "duration": 12000,
       "holdLast": true
     },
     "lie": {
@@ -385,7 +385,7 @@
       ],
       "fps": 2,
       "loop": false,
-      "duration": 5600,
+      "duration": 16000,
       "holdLast": true
     },
     "prone": {
@@ -397,7 +397,7 @@
       ],
       "fps": 2.2,
       "loop": false,
-      "duration": 5200,
+      "duration": 14000,
       "holdLast": true
     }
   }

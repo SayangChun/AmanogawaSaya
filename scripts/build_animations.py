@@ -349,7 +349,7 @@ def main() -> None:
             "frames": save_seq("sit", sit_frames),
             "fps": 2.5,
             "loop": False,
-            "duration": 4800,
+            "duration": 14000,
             "holdLast": True,
         },
         "stretch": {
