@@ -78,14 +78,17 @@ const IDLE_POOL = [
   "wave",
   "stretch",
   "sit",
+  "crouch",
+  "lie",
+  "prone",
   "peek",
   "think",
   "giggle",
   "yawn",
 ];
 
-/** 偶发「微序列」概率：连播两个小动作，更像自然行为 */
-const IDLE_FIDGET_CHANCE = 0.28;
+/** 偶发「微序列」概率：连播两个小动作，更像自然行为（走动变少后略提高） */
+const IDLE_FIDGET_CHANCE = 0.36;
 
 /** 兼容旧调用：行为 → 代表动作（首步） */
 export function actionForScene(scene) {
@@ -317,8 +320,11 @@ export function createMotionController(deps = {}) {
     markActionCooldown(pick, actionCooldowns);
     play(pick, { fromIdle: true });
 
-    // Rare quiet line when zone-picked sit (caller may also settle-sit with speech).
-    if (pick === "sit" && typeof deps.onZoneSit === "function") {
+    // Rare quiet line when zone-picked low posture (caller may also settle with speech).
+    if (
+      (pick === "sit" || pick === "crouch" || pick === "lie" || pick === "prone") &&
+      typeof deps.onZoneSit === "function"
+    ) {
       try {
         deps.onZoneSit(zoneIdForDom || (typeof getLastZoneId === "function" ? getLastZoneId() : null));
       } catch {
@@ -330,8 +336,8 @@ export function createMotionController(deps = {}) {
   function scheduleIdle() {
     clearIdleTimer();
     if (!enabled) return;
-    // Slightly tighter cadence so multi-action chains feel lively without rushing
-    const wait = 3800 + Math.random() * 5800;
+    // Lively in-place fidgets (look / sway / breathe…) — not screen walks
+    const wait = 3200 + Math.random() * 5200;
     idleTimer = setTimeout(() => {
       void tickIdle();
     }, wait);

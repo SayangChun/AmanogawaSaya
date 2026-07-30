@@ -5,22 +5,29 @@
 
 /** px per second while walking (screen space) */
 const WALK_SPEED = 72;
-/** roam planner cadence */
-const ROAM_MIN_MS = 9000;
-const ROAM_MAX_MS = 20000;
+/**
+ * Roam planner cadence — intentionally sparse so she mostly stays put
+ * with idle fidgets, rather than pacing the desktop.
+ * Mean check ≈ 32s; with chance × walk bias, screen walks are rare (~few min).
+ */
+const ROAM_MIN_MS = 18000;
+const ROAM_MAX_MS = 48000;
 /** chance to actually start a roam when timer fires */
-const ROAM_CHANCE = 0.62;
-/** among roams: walk vs hop */
-const WALK_VS_HOP = 0.82;
+const ROAM_CHANCE = 0.38;
+/**
+ * Among roams: probability of walk (window translates) vs hop (in place).
+ * Prefer hop so "alive" moments don't mean constant screen walking.
+ */
+const WALK_VS_HOP = 0.32;
 /** min / max walk duration (ms) when planner starts a walk */
-const WALK_MS_MIN = 2800;
-const WALK_MS_MAX = 5200;
+const WALK_MS_MIN = 2200;
+const WALK_MS_MAX = 4200;
 /** keep a small safety margin so the pet does not press into the edge */
 const EDGE_MARGIN_PX = 18;
 
 /**
  * Actions that may auto-roam (zone may favor look/alert — must not hard-block roam).
- * sit / sleep / talk / etc. still block.
+ * sit / sleep / crouch / lie / prone / talk / etc. still block.
  */
 const CALM_FOR_ROAM = new Set([
   "idle",
@@ -37,6 +44,7 @@ const CALM_FOR_ROAM = new Set([
   "giggle",
   "yawn",
 ]);
+// crouch / lie / prone / sit / rest intentionally omitted — low postures stay put
 
 /**
  * @typedef {{

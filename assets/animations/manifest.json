@@ -352,14 +352,52 @@
       "frames": [
         "./assets/animations/calm/00.png",
         "./assets/animations/soft/01.png",
-        "./assets/animations/sit/00.png",
         "./assets/animations/sit/01.png",
-        "./assets/animations/sit/02.png",
-        "./assets/animations/sit/03.png"
+        "./assets/animations/sit/03.png",
+        "./assets/animations/crouch/02.png",
+        "./assets/animations/crouch/03.png"
       ],
       "fps": 2.2,
       "loop": false,
-      "duration": 5000,
+      "duration": 5200,
+      "holdLast": true
+    },
+    "crouch": {
+      "frames": [
+        "./assets/animations/crouch/00.png",
+        "./assets/animations/crouch/01.png",
+        "./assets/animations/crouch/02.png",
+        "./assets/animations/crouch/03.png",
+        "./assets/animations/crouch/04.png"
+      ],
+      "fps": 2.5,
+      "loop": false,
+      "duration": 4800,
+      "holdLast": true
+    },
+    "lie": {
+      "frames": [
+        "./assets/animations/lie/00.png",
+        "./assets/animations/lie/01.png",
+        "./assets/animations/lie/02.png",
+        "./assets/animations/lie/03.png",
+        "./assets/animations/lie/04.png"
+      ],
+      "fps": 2,
+      "loop": false,
+      "duration": 5600,
+      "holdLast": true
+    },
+    "prone": {
+      "frames": [
+        "./assets/animations/prone/00.png",
+        "./assets/animations/prone/01.png",
+        "./assets/animations/prone/02.png",
+        "./assets/animations/prone/03.png"
+      ],
+      "fps": 2.2,
+      "loop": false,
+      "duration": 5200,
       "holdLast": true
     }
   }

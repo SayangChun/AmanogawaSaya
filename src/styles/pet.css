@@ -274,6 +274,35 @@
   opacity: 0.85;
 }
 
+/* Low postures: wider softer ground contact */
+.act-crouch .pet-shadow {
+  transform: translateX(-50%) scaleX(1.2);
+  opacity: 0.88;
+}
+
+.act-crouch .pet-body {
+  animation: body-breathe 3.4s ease-in-out infinite;
+}
+
+.act-lie .pet-shadow {
+  transform: translateX(-50%) scaleX(1.45);
+  opacity: 0.78;
+}
+
+.act-lie .pet-body {
+  animation: body-sleep-soft 5.2s ease-in-out infinite;
+  filter: drop-shadow(0 4px 7px rgba(0, 0, 0, 0.38)) brightness(0.97);
+}
+
+.act-prone .pet-shadow {
+  transform: translateX(-50%) scaleX(1.4);
+  opacity: 0.8;
+}
+
+.act-prone .pet-body {
+  animation: body-breathe 3.8s ease-in-out infinite;
+}
+
 .act-stretch .pet-body,
 .act-calm .pet-body,
 .act-coat .pet-body,

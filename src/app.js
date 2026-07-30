@@ -762,7 +762,7 @@ async function handleDockAction(action) {
       break;
     }
     case "sit": {
-      // lock → affinity/line → multi-action rest chain (stretch→sit etc.)
+      // lock → affinity/line → multi-action rest chain (stretch→sit / crouch / lie …)
       motion.lockFor(6000);
       const before = state.affinity;
       state = gainAffinity(state, 1);
@@ -779,6 +779,26 @@ async function handleDockAction(action) {
       updateAffinityDom();
       persist();
       motion.playBehavior("menuSit", { force: true, holdMs: 6000 });
+      break;
+    }
+    case "pose": {
+      // 主动换低位姿势：蹲 / 趴 / 躺
+      motion.lockFor(5800);
+      const beforePose = state.affinity;
+      state = gainAffinity(state, 1);
+      delete state._affinityGained;
+      const poseLine = speak("menuPose", { affinity: state.affinity });
+      currentScene = "talk";
+      currentLine = poseLine.text;
+      if (state.affinity > beforePose && state.affinity % 20 === 0) {
+        const extra = speak("affinityUp", { affinity: state.affinity });
+        currentLine = `${currentLine}\n${extra.text}`;
+      }
+      openBubble(4800);
+      updateBubbleDom();
+      updateAffinityDom();
+      persist();
+      motion.playBehavior("menuPose", { force: true, holdMs: 5800 });
       break;
     }
     case "toggle-wander":
@@ -908,6 +928,10 @@ function shellHtml() {
             <button class="dock-btn" data-dock-action="sit" type="button" title="坐下休息">
               <span class="ico" aria-hidden="true">🪑</span>
               <span class="lbl">坐下</span>
+            </button>
+            <button class="dock-btn" data-dock-action="pose" type="button" title="换个姿势：蹲、趴、躺">
+              <span class="ico" aria-hidden="true">🧘‍♀️</span>
+              <span class="lbl">姿势</span>
             </button>
             <button
               class="dock-btn${wanderOn ? " is-on" : ""}"

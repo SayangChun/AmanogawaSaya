@@ -27,9 +27,10 @@ npm start
 沙夜以**姿势帧序列切换**实现动作（类似 VPet 精灵帧动画），脚底为锚点并带轻微 CSS 补间：
 
 - 待机呼吸、左右张望、原地小跑
-- 坐下、伸懒腰、挥手打招呼
+- 坐下、蹲下 `crouch`、侧躺 `lie`、趴着 `prone`、伸懒腰、挥手打招呼
 - 点击弹跳、害羞、庆祝、被拖动拎起
 - 组合动作：沉思 `think`、探头 `peek`、打哈欠 `yawn`、轻笑 `giggle`、问候 `greet`、歇息 `rest`
+- 快捷栏「姿势」可主动切换蹲 / 趴 / 躺；角落与屏幕底边 idle 更易进入低位姿态
 - **行为多动作**：`src/character/behaviors.js` 里一个行为可配置多条加权变体，每条是动作链（如夸奖 → 害羞→微笑）；链内顺序播放、中间不回 idle
 - **屏幕分区姿势**：贴边/角落时更安静张望，开阔区 freer；默认右下角有启动宽限期防过静
 - 固定 **冬制服** 形象；动作由 `assets/animations/<动作>/` 下 PNG 帧驱动（部分组合动作复用现有帧）
@@ -40,6 +41,8 @@ npm start
 
 ```bash
 python scripts/build_animations.py
+# 仅重建蹲/躺/趴等低位姿势帧包：
+python scripts/build_rest_poses.py
 ```
 
 ### 亲密度（基础）
@@ -67,7 +70,7 @@ python scripts/build_animations.py
 
 ## 资源
 
-- `assets/animations/`：**动作帧包**（idle / walk / wave / hop / sit / sleep / drag 等）+ `manifest.json`
+- `assets/animations/`：**动作帧包**（idle / walk / wave / hop / sit / crouch / lie / prone / sleep / drag 等）+ `manifest.json`
 - `assets/animations/default.png`：默认站立帧
 - `assets/icons/`：应用 / 托盘图标
 - `assets/portraits/`：历史立绘（备用）

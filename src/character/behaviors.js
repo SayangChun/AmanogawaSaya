@@ -69,15 +69,19 @@ export const BEHAVIORS = {
       { weight: 2.0, chain: ["yawn", "sleep"] },
       { weight: 1.6, chain: ["soft", "sleep"] },
       { weight: 1.2, chain: ["breathe", "sleep"] },
+      { weight: 1.1, chain: ["lie", { action: "sleep", holdMs: null }] },
       { weight: 1.0, chain: ["sit", { action: "sleep", holdMs: null }] },
+      { weight: 0.85, chain: ["prone", "soft"] },
     ],
   },
   lateNight: {
     context: "sleep",
     variants: [
-      { weight: 2.2, chain: ["sleep"] },
-      { weight: 1.4, chain: ["breathe", "sleep"] },
+      { weight: 2.0, chain: ["sleep"] },
+      { weight: 1.5, chain: ["lie", { action: "sleep", holdMs: null }] },
+      { weight: 1.3, chain: ["breathe", "sleep"] },
       { weight: 1.0, chain: ["yawn", "sleep"] },
+      { weight: 0.9, chain: ["prone", "breathe"] },
       { weight: 0.8, chain: ["soft", "breathe", "sleep"] },
     ],
   },
@@ -134,12 +138,17 @@ export const BEHAVIORS = {
   // —— 菜单 / 场所 ——
   menuSit: {
     variants: [
-      { weight: 2.0, chain: ["sit"] },
+      { weight: 1.8, chain: ["sit"] },
       { weight: 1.5, chain: ["rest"] },
       { weight: 1.4, chain: ["stretch", "sit"] },
+      { weight: 1.3, chain: ["crouch"] },
       { weight: 1.2, chain: ["yawn", "sit"] },
+      { weight: 1.15, chain: ["lie"] },
+      { weight: 1.05, chain: ["prone"] },
       { weight: 1.0, chain: ["soft", "sit"] },
+      { weight: 0.9, chain: ["crouch", "prone"] },
       { weight: 0.8, chain: ["calm", "sit"] },
+      { weight: 0.7, chain: ["sit", "lie"] },
     ],
   },
   menuHop: {
@@ -150,45 +159,67 @@ export const BEHAVIORS = {
       { weight: 0.9, chain: ["giggle", "hop"] },
     ],
   },
+  /** 菜单「姿势」轮换：蹲 / 趴 / 躺 等低位姿态 */
+  menuPose: {
+    variants: [
+      { weight: 2.0, chain: ["crouch"] },
+      { weight: 1.7, chain: ["prone"] },
+      { weight: 1.5, chain: ["lie"] },
+      { weight: 1.2, chain: ["soft", "crouch"] },
+      { weight: 1.0, chain: ["crouch", "prone"] },
+      { weight: 0.9, chain: ["sit", "lie"] },
+      { weight: 0.8, chain: ["yawn", "lie"] },
+    ],
+  },
   settle: {
     variants: [
-      { weight: 2.0, chain: ["soft"] },
-      { weight: 1.5, chain: ["look"] },
+      { weight: 1.8, chain: ["soft"] },
+      { weight: 1.4, chain: ["look"] },
       { weight: 1.2, chain: ["calm"] },
       { weight: 1.0, chain: ["peek"] },
+      { weight: 0.9, chain: ["crouch"] },
       { weight: 0.8, chain: ["breathe", "soft"] },
+      { weight: 0.7, chain: ["prone"] },
     ],
   },
   settleEdge: {
     variants: [
-      { weight: 2.0, chain: ["look"] },
-      { weight: 1.6, chain: ["soft"] },
+      { weight: 1.9, chain: ["look"] },
+      { weight: 1.5, chain: ["soft"] },
       { weight: 1.2, chain: ["peek"] },
       { weight: 1.0, chain: ["alert", "soft"] },
+      { weight: 0.9, chain: ["crouch"] },
       { weight: 0.8, chain: ["think"] },
+      { weight: 0.7, chain: ["prone"] },
     ],
   },
   settleCorner: {
     variants: [
-      { weight: 2.0, chain: ["sit"] },
-      { weight: 1.4, chain: ["soft", "sit"] },
-      { weight: 1.2, chain: ["calm", "sit"] },
-      { weight: 1.0, chain: ["look", "soft"] },
+      { weight: 1.7, chain: ["sit"] },
+      { weight: 1.4, chain: ["lie"] },
+      { weight: 1.3, chain: ["prone"] },
+      { weight: 1.2, chain: ["soft", "sit"] },
+      { weight: 1.1, chain: ["crouch"] },
+      { weight: 1.0, chain: ["calm", "sit"] },
+      { weight: 0.9, chain: ["look", "soft"] },
     ],
   },
 
   // —— 闲置微序列（偶尔连续小动作，更有「活着」感）——
   idleFidget: {
     variants: [
-      { weight: 1.8, chain: ["look", "soft"] },
-      { weight: 1.5, chain: ["sway", "smile"] },
+      { weight: 1.7, chain: ["look", "soft"] },
+      { weight: 1.4, chain: ["sway", "smile"] },
       { weight: 1.3, chain: ["nod", "calm"] },
       { weight: 1.2, chain: ["stretch", "breathe"] },
       { weight: 1.1, chain: ["peek", "calm"] },
       { weight: 1.0, chain: ["think", "soft"] },
+      { weight: 0.95, chain: ["crouch", "soft"] },
       { weight: 0.9, chain: ["yawn", "breathe"] },
+      { weight: 0.85, chain: ["prone", "calm"] },
       { weight: 0.8, chain: ["wave", "smile"] },
       { weight: 0.7, chain: ["giggle", "soft"] },
+      { weight: 0.6, chain: ["lie", "breathe"] },
     ],
   },
 };
