@@ -27,43 +27,32 @@ let windowDragging = false;
 /**
  * Window modes — sized tightly around the full-body sprite so the
  * transparent chrome does not occupy a large desktop rectangle.
- * Resizes keep the character *feet* fixed on screen (not the window edge),
- * so dock chrome can open above/below without Saya jumping.
+ * Resizes keep the character *body center-X* and *feet-Y* fixed on screen,
+ * so a side dock can open left/right without Saya or her bubble jumping.
  * Mouse passthrough (renderer) lets empty pixels click through to the desktop.
  */
+/** Character column width (sprite + horizontal pad) while dock is open. */
+const BODY_COL = 132;
+
 const WINDOW_MODES = {
   // Body only: pet-hit ~120×170 + minimal padding
   compact: { width: 136, height: 196 },
   // Bubble above body (short 1–2 line lines)
   speak: { width: 196, height: 272 },
-  // Body + two-row compact action dock (+ room for optional bubble)
-  dock: { width: 280, height: 320 },
-  // Dock + secondary stats submenu (affinity / counts)
-  dockStats: { width: 288, height: 440 },
+  // Body + vertical side dock (7 action buttons)
+  dock: { width: 204, height: 280 },
+  // Side dock + secondary stats submenu (affinity / counts)
+  dockStats: { width: 360, height: 280 },
 };
 
 /**
- * Anchor inset from window bottom when the sprite is at the bottom of the stack
- * (compact / speak / dock-above). Matches historical setMode −20px feet line.
+ * Anchor inset from window bottom to the character feet line.
+ * Side dock grows horizontally (and upward if taller); feet stay at bottom.
  */
 const FEET_PAD = 20;
 
-/**
- * Layout height that actually sits *under* the sprite when the dock is below.
- * Must be the real bar size — NOT (windowModeHeight − compactHeight).
- * Dock windows intentionally keep slack above the stack (flex-end); that slack
- * is above Saya, so counting it as “under feet” pushes her down on open.
- *
- * Primary: margin-top 2 + padding 13 + 2×38 buttons + gap 3 ≈ 94
- * Stats: primary + dock-sub (affinity + pills + gaps) ≈ +150
- */
-const DOCK_BELOW_CHROME = {
-  dock: 94,
-  dockStats: 244,
-};
-
-/** @type {"above" | "below"} dock placement relative to the character */
-let currentDockPlacement = "below";
+/** @type {"left" | "right"} dock placement relative to the character */
+let currentDockPlacement = "right";
 
 function modeSize(mode = currentMode) {
   return WINDOW_MODES[mode] || WINDOW_MODES.compact;
@@ -71,15 +60,30 @@ function modeSize(mode = currentMode) {
 
 /**
  * Distance from window bottom to the character feet anchor.
- * Dock-below uses real chrome height only; window slack stays above the stack.
- * @param {string} mode
- * @param {"above" | "below"} [placement]
+ * @param {string} [_mode]
+ * @param {"left" | "right"} [_placement]
  */
-function feetFromBottom(mode, placement = currentDockPlacement) {
-  if ((mode === "dock" || mode === "dockStats") && placement === "below") {
-    return FEET_PAD + (DOCK_BELOW_CHROME[mode] ?? DOCK_BELOW_CHROME.dock);
-  }
+function feetFromBottom(_mode, _placement = currentDockPlacement) {
   return FEET_PAD;
+}
+
+/**
+ * Character body center-X within the window (for horizontal anchor on resize).
+ * Side dock places the sprite in the left or right body column — not window center.
+ * @param {string} mode
+ * @param {"left" | "right"} placement
+ * @param {number} width
+ */
+function bodyCenterFromLeft(mode, placement, width) {
+  if (mode === "dock" || mode === "dockStats") {
+    if (placement === "left") {
+      // Dock on the left → sprite column on the right.
+      return width - BODY_COL / 2;
+    }
+    // Dock on the right → sprite column on the left.
+    return BODY_COL / 2;
+  }
+  return width / 2;
 }
 
 const STATE_PATH = path.join(app.getPath("userData"), "saya-pet-state.json");
@@ -209,9 +213,9 @@ function clampToWorkArea(x, y, width, height) {
 }
 
 /**
- * Resize while keeping the character *feet* fixed on screen.
- * Dock placement (`above` | `below`) decides whether extra chrome grows
- * upward or downward so Saya does not jump when the shortcut bar opens.
+ * Resize while keeping the character *body center-X* and *feet-Y* fixed.
+ * Dock placement (`left` | `right`) decides which side extra chrome grows
+ * so Saya and her dialogue bubble do not jump when the shortcut bar opens.
  * No-ops when already at target size + placement (avoids jitter while dragging).
  * Blocked while the user is dragging the pet (window must not grow mid-drag).
  *
@@ -219,7 +223,7 @@ function clampToWorkArea(x, y, width, height) {
  * @param {{
  *   animate?: boolean,
  *   force?: boolean,
- *   dockPlacement?: "above" | "below",
+ *   dockPlacement?: "left" | "right",
  *   prevFeetFromBottom?: number,
  *   feetFromBottom?: number,
  * }} [opts]
@@ -245,12 +249,18 @@ function setMode(
     return { mode: currentMode, ...mainWindow.getBounds(), blocked: true };
   }
 
+  // Map legacy above/below → right/left so older callers stay safe.
+  let requested = dockPlacement;
+  if (requested === "above" || requested === "below") {
+    requested = requested === "above" ? "left" : "right";
+  }
+
   const nextPlacement =
     mode === "dock" || mode === "dockStats"
-      ? dockPlacement === "above" || dockPlacement === "below"
-        ? dockPlacement
+      ? requested === "left" || requested === "right"
+        ? requested
         : currentDockPlacement
-      : "below";
+      : "right";
 
   const next = WINDOW_MODES[mode];
   const current = mainWindow.getBounds();
@@ -269,8 +279,8 @@ function setMode(
     return { mode, ...current, skipped: true };
   }
 
-  // Feet screen position before resize (center-X + feet-Y).
-  // Renderer may pass measured insets when CSS chrome ≠ WINDOW_MODES slack.
+  // Body screen position before resize (body center-X + feet-Y).
+  // Renderer may pass measured feet insets when layout differs slightly.
   const prevFeet =
     typeof prevFeetOverride === "number" && Number.isFinite(prevFeetOverride)
       ? prevFeetOverride
@@ -279,10 +289,12 @@ function setMode(
     typeof nextFeetOverride === "number" && Number.isFinite(nextFeetOverride)
       ? nextFeetOverride
       : feetFromBottom(mode, nextPlacement);
-  const anchorX = current.x + current.width / 2;
+  const prevBodyCx = bodyCenterFromLeft(prevMode, prevPlacement, current.width);
+  const nextBodyCx = bodyCenterFromLeft(mode, nextPlacement, next.width);
+  const anchorX = current.x + prevBodyCx;
   const anchorY = current.y + current.height - prevFeet;
 
-  let x = Math.round(anchorX - next.width / 2);
+  let x = Math.round(anchorX - nextBodyCx);
   let y = Math.round(anchorY - (next.height - nextFeet));
   ({ x, y } = clampToWorkArea(x, y, next.width, next.height));
 

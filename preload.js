@@ -15,7 +15,7 @@ contextBridge.exposeInMainWorld("petApi", {
   workArea: () => ipcRenderer.invoke("pet:work-area"),
   /**
    * @param {string} mode
-   * @param {{ dockPlacement?: "above" | "below", animate?: boolean, force?: boolean }} [options]
+   * @param {{ dockPlacement?: "left" | "right", animate?: boolean, force?: boolean }} [options]
    */
   setMode: (mode, options) => ipcRenderer.invoke("pet:set-mode", mode, options),
   /**

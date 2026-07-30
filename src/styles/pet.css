@@ -397,14 +397,77 @@
   opacity: 0.35;
 }
 
-/* ===== Shortcut dock (right-click; above or below character) ===== */
-.dock {
-  width: 100%;
-  max-width: 268px;
+/* ===== Shortcut dock (right-click; vertical bar left/right of character) ===== */
+
+/* Character + bubble column — keeps dialogue stacked over Saya only */
+.shell-col {
   display: flex;
   flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.shell.dock-placement-left,
+.shell.dock-placement-right {
+  flex-direction: row;
+  align-items: flex-end;
+  justify-content: flex-start;
+  gap: 4px;
+}
+
+.shell.dock-placement-left .shell-col,
+.shell.dock-placement-right .shell-col {
+  width: auto;
+  flex: 0 0 auto;
+  max-width: 132px;
+}
+
+/* Dock on the left of Saya */
+.shell.dock-placement-left .dock {
+  order: 0;
+  transform-origin: center right;
+  animation-name: dock-in-left;
+}
+.shell.dock-placement-left .shell-col {
+  order: 1;
+}
+/* Stats expand further outward (away from character) */
+.shell.dock-placement-left .dock-sub {
+  order: 0;
+}
+.shell.dock-placement-left .dock-actions {
+  order: 1;
+}
+
+/* Dock on the right of Saya */
+.shell.dock-placement-right .shell-col {
+  order: 0;
+}
+.shell.dock-placement-right .dock {
+  order: 1;
+  transform-origin: center left;
+  animation-name: dock-in-right;
+}
+.shell.dock-placement-right .dock-actions {
+  order: 0;
+}
+.shell.dock-placement-right .dock-sub {
+  order: 1;
+}
+
+.dock {
+  width: auto;
+  max-width: none;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
   gap: 5px;
-  padding: 6px 7px 7px;
+  padding: 5px;
   border-radius: 14px;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -414,42 +477,8 @@
   flex-shrink: 0;
   pointer-events: auto;
   -webkit-app-region: no-drag;
-  animation: dock-in-below 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.15);
-  transform-origin: top center;
-}
-
-/* Default / explicit: bar under feet */
-.shell.dock-placement-below .dock,
-.shell:not(.dock-placement-above) .dock {
-  margin-top: 2px;
-  margin-bottom: 0;
-  transform-origin: top center;
-  animation-name: dock-in-below;
-}
-
-/* Bar above the sprite (near screen bottom edge) */
-.shell.dock-placement-above .bubble {
-  order: 0;
-}
-.shell.dock-placement-above .dock {
-  order: 1;
-  margin-top: 0;
-  margin-bottom: 2px;
-  transform-origin: bottom center;
-  animation-name: dock-in-above;
-}
-.shell.dock-placement-above .stage {
-  order: 2;
-}
-
-.shell.dock-placement-below .bubble {
-  order: 0;
-}
-.shell.dock-placement-below .stage {
-  order: 1;
-}
-.shell.dock-placement-below .dock {
-  order: 2;
+  animation: dock-in-right 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.15);
+  transform-origin: center left;
 }
 
 .dock.closed {
@@ -462,12 +491,14 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  width: 148px;
   padding: 6px 6px 7px;
   border-radius: 12px;
   background: rgba(0, 0, 0, 0.22);
   border: 1px solid rgba(160, 190, 255, 0.12);
   animation: dock-sub-in 0.16s ease;
-  transform-origin: bottom center;
+  transform-origin: center center;
+  align-self: flex-end;
 }
 
 .dock-sub.closed {
@@ -569,32 +600,66 @@
   font-size: 0.82rem;
 }
 
-/* Two compact rows × four actions */
+/* Vertical action strip */
 .dock-actions {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  width: 100%;
-  min-width: 0;
+  gap: 2px;
+  width: 50px;
+  min-width: 50px;
+  flex: 0 0 auto;
 }
 
+/* Legacy row wrappers (if any) flatten into the vertical strip */
 .dock-row {
-  display: flex;
-  flex-wrap: nowrap;
-  justify-content: space-between;
-  align-items: stretch;
-  gap: 3px;
-  width: 100%;
+  display: contents;
 }
 
 @keyframes dock-sub-in {
   from {
     opacity: 0;
-    transform: translateY(4px);
+    transform: translateX(6px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateX(0);
+  }
+}
+
+.shell.dock-placement-left .dock-sub {
+  animation-name: dock-sub-in-left;
+}
+
+@keyframes dock-sub-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes dock-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes dock-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
   }
 }
 
@@ -641,11 +706,17 @@
   height: 170px;
 }
 
-/* Dock open: keep sprite size stable; bar sits above/below without scaling her */
+/* Dock open: keep sprite size stable; side bar must not scale her */
 .mode-dock.shell-with-bubble .pet-hit,
 .mode-dock .pet-hit {
   width: 120px;
   height: 170px;
+}
+
+.mode-dock .shell-with-bubble .bubble,
+.shell.dock-placement-left .bubble,
+.shell.dock-placement-right .bubble {
+  width: min(100%, 124px);
 }
 
 .dock-btn {
@@ -654,11 +725,12 @@
   align-items: center;
   justify-content: center;
   gap: 1px;
-  flex: 1 1 0;
+  flex: 0 0 auto;
+  width: 100%;
   min-width: 0;
   min-height: 0;
-  height: 38px;
-  padding: 4px 2px 3px;
+  height: 32px;
+  padding: 3px 2px 2px;
   border-radius: 10px;
   color: var(--text);
   background: rgba(255, 255, 255, 0.03);
@@ -919,7 +991,7 @@
   }
 }
 
-/* (legacy floating context menu removed — actions live in bottom .dock) */
+/* (legacy floating context menu removed — actions live in side .dock) */
 
 /* Speech bubble clickability */
 .shell-with-bubble .bubble {

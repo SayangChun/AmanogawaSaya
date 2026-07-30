@@ -24,15 +24,15 @@ let currentLine = state.lastLine || "";
 let currentScene = state.lastScene || "boot";
 
 let autoWanderEnabled = true;
-/** Bottom shortcut dock open (right-click). */
+/** Side shortcut dock open (right-click). */
 let dockOpen = false;
 /** Secondary dock submenu: affinity / stats (under 星轨). */
 let dockStatsOpen = false;
 /**
- * Where the dock sits relative to Saya: below feet (default) or above head.
- * @type {"above" | "below"}
+ * Where the dock sits relative to Saya: left or right of the body.
+ * @type {"left" | "right"}
  */
-let dockPlacement = "below";
+let dockPlacement = "right";
 /** Last applied OS mouse-ignore state (true = click-through empty pixels). */
 let mouseIgnoreActive = null;
 /**
@@ -296,7 +296,8 @@ function scheduleRefreshMouseIgnore(clientX, clientY) {
 }
 
 /**
- * @returns {Promise<"above" | "below">}
+ * Prefer the side with enough room for the vertical dock (and stats if open).
+ * @returns {Promise<"left" | "right">}
  */
 async function chooseDockPlacement() {
   try {
@@ -304,25 +305,26 @@ async function chooseDockPlacement() {
       window.petApi?.bounds?.() ?? Promise.resolve(null),
       window.petApi?.workArea?.() ?? Promise.resolve(null),
     ]);
-    if (!bounds || !work) return "below";
+    if (!bounds || !work) return "right";
 
-    const need = dockStatsOpen ? 250 : 140;
-    const spaceBelow = work.y + work.height - (bounds.y + bounds.height);
-    const spaceAbove = bounds.y - work.y;
+    const need = dockStatsOpen ? 230 : 80;
+    const spaceRight = work.x + work.width - (bounds.x + bounds.width);
+    const spaceLeft = bounds.x - work.x;
 
-    if (spaceBelow >= need) return "below";
-    if (spaceAbove >= need) return "above";
-    return spaceAbove > spaceBelow ? "above" : "below";
+    if (spaceRight >= need) return "right";
+    if (spaceLeft >= need) return "left";
+    return spaceLeft > spaceRight ? "left" : "right";
   } catch {
-    return "below";
+    return "right";
   }
 }
 
 function applyDockPlacementClass() {
   const shell = dom.shell || document.querySelector(".shell");
   if (!shell) return;
-  shell.classList.toggle("dock-placement-above", dockOpen && dockPlacement === "above");
-  shell.classList.toggle("dock-placement-below", dockOpen && dockPlacement === "below");
+  shell.classList.toggle("dock-placement-left", dockOpen && dockPlacement === "left");
+  shell.classList.toggle("dock-placement-right", dockOpen && dockPlacement === "right");
+  shell.classList.remove("dock-placement-above", "dock-placement-below");
 }
 
 /**
@@ -341,6 +343,22 @@ async function measurePetFeetScreenY() {
 }
 
 /**
+ * @returns {Promise<number | null>}
+ */
+async function measurePetBodyScreenCenterX() {
+  const pet = dom.petHit || document.querySelector("#pet-hit");
+  if (!pet || !window.petApi?.bounds) return null;
+  try {
+    const bounds = await window.petApi.bounds();
+    if (!bounds) return null;
+    const r = pet.getBoundingClientRect();
+    return bounds.x + (r.left + r.right) / 2;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * @param {number | null | undefined} targetScreenY
  */
 async function correctPetFeetScreenY(targetScreenY) {
@@ -351,6 +369,20 @@ async function correctPetFeetScreenY(targetScreenY) {
   if (now == null) return;
   const dy = Math.round(targetScreenY - now);
   if (dy !== 0) window.petApi.moveBy({ dx: 0, dy });
+}
+
+/**
+ * Keep Saya's horizontal screen position stable after a side-dock resize.
+ * @param {number | null | undefined} targetScreenX
+ */
+async function correctPetBodyScreenX(targetScreenX) {
+  if (targetScreenX == null || !Number.isFinite(targetScreenX)) return;
+  if (!window.petApi?.moveBy) return;
+  await new Promise((r) => requestAnimationFrame(() => r()));
+  const now = await measurePetBodyScreenCenterX();
+  if (now == null) return;
+  const dx = Math.round(targetScreenX - now);
+  if (dx !== 0) window.petApi.moveBy({ dx, dy: 0 });
 }
 
 /**
@@ -399,7 +431,7 @@ async function syncWindowChrome(feetOpts = {}) {
   windowChromeMode = next;
   lastChromePlacement = placementKey;
 
-  /** @type {{ dockPlacement?: "above" | "below", prevFeetFromBottom?: number, feetFromBottom?: number }} */
+  /** @type {{ dockPlacement?: "left" | "right", prevFeetFromBottom?: number, feetFromBottom?: number }} */
   const opts = {};
   if (dockOpen) opts.dockPlacement = dockPlacement;
   if (typeof feetOpts.prevFeetFromBottom === "number") {
@@ -544,6 +576,7 @@ async function toggleDock(show, pointer = {}) {
 
   if (!willOpen) {
     const feetY = await measurePetFeetScreenY();
+    const bodyX = await measurePetBodyScreenCenterX();
     const prevFeet = measureFeetFromBottomClient();
     dockOpen = false;
     dockStatsOpen = false;
@@ -554,6 +587,7 @@ async function toggleDock(show, pointer = {}) {
       prevFeet != null ? { prevFeetFromBottom: prevFeet } : {},
     );
     await correctPetFeetScreenY(feetY);
+    await correctPetBodyScreenX(bodyX);
     refreshMouseIgnore(pointer.clientX, pointer.clientY);
     return;
   }
@@ -568,6 +602,7 @@ async function toggleDock(show, pointer = {}) {
   }
 
   const feetY = await measurePetFeetScreenY();
+  const bodyX = await measurePetBodyScreenCenterX();
   const prevFeet = measureFeetFromBottomClient();
 
   dockPlacement = await chooseDockPlacement();
@@ -576,11 +611,9 @@ async function toggleDock(show, pointer = {}) {
 
   /** @type {{ prevFeetFromBottom?: number, feetFromBottom?: number }} */
   const feetOpts = {};
-  if (prevFeet != null) feetOpts.prevFeetFromBottom = prevFeet;
-  if (dockPlacement === "below") {
-    const estChrome = dockStatsOpen ? 244 : 94;
-    feetOpts.feetFromBottom = (prevFeet ?? 20) + estChrome;
-  } else if (prevFeet != null) {
+  if (prevFeet != null) {
+    feetOpts.prevFeetFromBottom = prevFeet;
+    // Side dock keeps feet at the same inset (grows sideways / upward).
     feetOpts.feetFromBottom = prevFeet;
   }
 
@@ -588,6 +621,7 @@ async function toggleDock(show, pointer = {}) {
   dock.classList.remove("closed");
   applyDockPlacementClass();
   await correctPetFeetScreenY(feetY);
+  await correctPetBodyScreenX(bodyX);
   applyMouseIgnore(false);
   updateDockWanderText();
   updateDockStatsPanel();
@@ -608,18 +642,14 @@ async function toggleDockStats(show = !dockStatsOpen) {
   }
 
   const feetY = await measurePetFeetScreenY();
+  const bodyX = await measurePetBodyScreenCenterX();
   const prevFeet = measureFeetFromBottomClient();
   dockStatsOpen = willShow;
 
   /** @type {{ prevFeetFromBottom?: number, feetFromBottom?: number }} */
   const feetOpts = {};
-  if (prevFeet != null) feetOpts.prevFeetFromBottom = prevFeet;
-  if (dockPlacement === "below") {
-    const estChrome = dockStatsOpen ? 244 : 94;
-    const oldChrome = dockStatsOpen ? 94 : 244;
-    feetOpts.feetFromBottom = (prevFeet ?? 20) - oldChrome + estChrome;
-    if (feetOpts.feetFromBottom < 20) feetOpts.feetFromBottom = 20 + estChrome;
-  } else if (prevFeet != null) {
+  if (prevFeet != null) {
+    feetOpts.prevFeetFromBottom = prevFeet;
     feetOpts.feetFromBottom = prevFeet;
   }
 
@@ -628,6 +658,7 @@ async function toggleDockStats(show = !dockStatsOpen) {
   await syncWindowChrome(feetOpts);
   updateDockStatsPanel();
   await correctPetFeetScreenY(feetY);
+  await correctPetBodyScreenX(bodyX);
   if (dockStatsOpen) updateAffinityDom();
   applyMouseIgnore(false);
 }
@@ -704,6 +735,10 @@ async function handleDockAction(action) {
       say("praise", { affinityGain: 2 });
       spawnParticles(70, 90, "💖");
       break;
+    case "move":
+      // 运动：随机散步 / 小跳
+      await handleDockAction(Math.random() < 0.5 ? "walk" : "hop");
+      break;
     case "walk": {
       speakAndShow({
         text: "要在桌面上走走吗？好的~",
@@ -724,6 +759,10 @@ async function handleDockAction(action) {
       spawnParticles(70, 90, "✨");
       break;
     }
+    case "rest":
+      // 休息：随机坐下 / 换姿势
+      await handleDockAction(Math.random() < 0.5 ? "sit" : "pose");
+      break;
     case "sit": {
       motion.lockFor(6000);
       speakAndShow({ scene: "menuSit", affinityGain: 1, bubbleMs: 5000 });
@@ -775,32 +814,34 @@ function shellHtml() {
   const periodLabel = TIME_BUCKET_LABELS[timeBucket()] || "此刻";
   const placementClass = !dockOpen
     ? ""
-    : dockPlacement === "above"
-      ? "dock-placement-above"
-      : "dock-placement-below";
+    : dockPlacement === "left"
+      ? "dock-placement-left"
+      : "dock-placement-right";
   return `
     <div class="shell art-body shell-minimal shell-with-bubble${placementClass ? ` ${placementClass}` : ""}">
-      <div class="${bubbleClass}" id="bubble" role="status" aria-live="polite" title="点击与沙夜对话">
-        <div class="bubble-meta">
-          <span class="bubble-name">${CHARACTER.shortName}</span>
-          <span class="bubble-rank">${rank.title}</span>
-        </div>
-        <p class="bubble-text" id="line-text">${escapeHtml(currentLine || "……")}</p>
-      </div>
-
-      <div class="stage" id="stage">
-        <div class="stars" id="stars" aria-hidden="true"></div>
-        <div class="stage-glow"></div>
-
-        <button class="pet-hit" id="pet-hit" type="button" aria-label="拖动天之川沙夜">
-          <div class="pet-actor act-idle" id="pet-actor" data-action="idle">
-            <div class="pet-shadow" aria-hidden="true"></div>
-            <div class="pet-body">
-              <img class="pet-sprite is-visible" id="pet-layer-a" alt="${CHARACTER.name}" draggable="false" />
-              <img class="pet-sprite" id="pet-layer-b" alt="" draggable="false" />
-            </div>
+      <div class="shell-col" id="shell-col">
+        <div class="${bubbleClass}" id="bubble" role="status" aria-live="polite" title="点击与沙夜对话">
+          <div class="bubble-meta">
+            <span class="bubble-name">${CHARACTER.shortName}</span>
+            <span class="bubble-rank">${rank.title}</span>
           </div>
-        </button>
+          <p class="bubble-text" id="line-text">${escapeHtml(currentLine || "……")}</p>
+        </div>
+
+        <div class="stage" id="stage">
+          <div class="stars" id="stars" aria-hidden="true"></div>
+          <div class="stage-glow"></div>
+
+          <button class="pet-hit" id="pet-hit" type="button" aria-label="拖动天之川沙夜">
+            <div class="pet-actor act-idle" id="pet-actor" data-action="idle">
+              <div class="pet-shadow" aria-hidden="true"></div>
+              <div class="pet-body">
+                <img class="pet-sprite is-visible" id="pet-layer-a" alt="${CHARACTER.name}" draggable="false" />
+                <img class="pet-sprite" id="pet-layer-b" alt="" draggable="false" />
+              </div>
+            </div>
+          </button>
+        </div>
       </div>
 
       <div class="${dockClass}" id="pet-dock" role="toolbar" aria-label="沙夜快捷栏">
@@ -839,60 +880,48 @@ function shellHtml() {
         </div>
 
         <div class="dock-actions" role="group" aria-label="快捷操作">
-          <div class="dock-row" role="group" aria-label="互动与动作">
-            <button class="dock-btn primary" data-dock-action="talk" type="button" title="聊聊天">
-              <span class="ico" aria-hidden="true">💬</span>
-              <span class="lbl">聊聊</span>
-            </button>
-            <button class="dock-btn" data-dock-action="praise" type="button" title="夸夸沙夜">
-              <span class="ico" aria-hidden="true">✨</span>
-              <span class="lbl">夸奖</span>
-            </button>
-            <button class="dock-btn" data-dock-action="walk" type="button" title="散步走走">
-              <span class="ico" aria-hidden="true">🚶</span>
-              <span class="lbl">散步</span>
-            </button>
-            <button class="dock-btn" data-dock-action="hop" type="button" title="开心小跳">
-              <span class="ico" aria-hidden="true">🦘</span>
-              <span class="lbl">小跳</span>
-            </button>
-          </div>
-          <div class="dock-row" role="group" aria-label="休息与状态">
-            <button class="dock-btn" data-dock-action="sit" type="button" title="坐下休息">
-              <span class="ico" aria-hidden="true">🪑</span>
-              <span class="lbl">坐下</span>
-            </button>
-            <button class="dock-btn" data-dock-action="pose" type="button" title="换个姿势：蹲、趴、躺">
-              <span class="ico" aria-hidden="true">🧘‍♀️</span>
-              <span class="lbl">姿势</span>
-            </button>
-            <button
-              class="dock-btn${wanderOn ? " is-on" : ""}"
-              data-dock-action="toggle-wander"
-              id="dock-wander-toggle"
-              type="button"
-              aria-pressed="${wanderOn ? "true" : "false"}"
-              title="${wanderOn ? "漫游：开启（点击关闭）" : "漫游：关闭（点击开启）"}"
-            >
-              <span class="ico" aria-hidden="true">🌐</span>
-              <span class="lbl">${wanderOn ? "漫游" : "定住"}</span>
-            </button>
-            <button
-              class="dock-btn${dockStatsOpen ? " is-on" : ""}"
-              data-dock-action="stats"
-              id="dock-stats-toggle"
-              type="button"
-              aria-expanded="${dockStatsOpen ? "true" : "false"}"
-              title="${dockStatsOpen ? "收起星轨信息" : "查看星轨亲密度"}"
-            >
-              <span class="ico" aria-hidden="true">⭐</span>
-              <span class="lbl">${dockStatsOpen ? "收起" : "星轨"}</span>
-            </button>
-            <button class="dock-btn danger" data-dock-action="hide" type="button" title="隐藏到托盘">
-              <span class="ico" aria-hidden="true">📌</span>
-              <span class="lbl">隐藏</span>
-            </button>
-          </div>
+          <button class="dock-btn primary" data-dock-action="talk" type="button" title="聊聊天">
+            <span class="ico" aria-hidden="true">💬</span>
+            <span class="lbl">聊聊</span>
+          </button>
+          <button class="dock-btn" data-dock-action="praise" type="button" title="夸夸沙夜">
+            <span class="ico" aria-hidden="true">✨</span>
+            <span class="lbl">夸奖</span>
+          </button>
+          <button class="dock-btn" data-dock-action="move" type="button" title="运动：随机散步或小跳">
+            <span class="ico" aria-hidden="true">🏃</span>
+            <span class="lbl">运动</span>
+          </button>
+          <button class="dock-btn" data-dock-action="rest" type="button" title="休息：随机坐下或换姿势">
+            <span class="ico" aria-hidden="true">🌙</span>
+            <span class="lbl">休息</span>
+          </button>
+          <button
+            class="dock-btn${wanderOn ? " is-on" : ""}"
+            data-dock-action="toggle-wander"
+            id="dock-wander-toggle"
+            type="button"
+            aria-pressed="${wanderOn ? "true" : "false"}"
+            title="${wanderOn ? "漫游：开启（点击关闭）" : "漫游：关闭（点击开启）"}"
+          >
+            <span class="ico" aria-hidden="true">🌐</span>
+            <span class="lbl">${wanderOn ? "漫游" : "定住"}</span>
+          </button>
+          <button
+            class="dock-btn${dockStatsOpen ? " is-on" : ""}"
+            data-dock-action="stats"
+            id="dock-stats-toggle"
+            type="button"
+            aria-expanded="${dockStatsOpen ? "true" : "false"}"
+            title="${dockStatsOpen ? "收起星轨信息" : "查看星轨亲密度"}"
+          >
+            <span class="ico" aria-hidden="true">⭐</span>
+            <span class="lbl">${dockStatsOpen ? "收起" : "星轨"}</span>
+          </button>
+          <button class="dock-btn danger" data-dock-action="hide" type="button" title="隐藏到托盘">
+            <span class="ico" aria-hidden="true">📌</span>
+            <span class="lbl">隐藏</span>
+          </button>
         </div>
       </div>
     </div>
