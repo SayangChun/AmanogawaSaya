@@ -7,7 +7,10 @@ export const DEFAULT_STATE = {
   totalInteractions: 0,
   lastScene: "boot",
   lastLine: "",
+  userName: "",
 };
+
+export const USER_NAME_MAX = 12;
 
 export function loadState() {
   try {
@@ -23,6 +26,8 @@ export function loadState() {
       totalInteractions: Number(parsed.totalInteractions) || 0,
       lastScene: parsed.lastScene || DEFAULT_STATE.lastScene,
       lastLine: parsed.lastLine || "",
+      userName:
+        typeof parsed.userName === "string" ? parsed.userName.slice(0, USER_NAME_MAX) : "",
       mode: ["compact", "dock"].includes(parsed.mode) ? parsed.mode : "compact",
       version: 3,
     };
@@ -40,6 +45,7 @@ export function saveState(state) {
       totalInteractions: state.totalInteractions || 0,
       lastScene: state.lastScene || "",
       lastLine: state.lastLine || "",
+      userName: state.userName || "",
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(slim));
   } catch {
@@ -59,4 +65,17 @@ export function gainAffinity(state, amount = 1) {
     totalInteractions: (state.totalInteractions || 0) + 1,
     _affinityGained: gained && amount > 0,
   };
+}
+
+/**
+ * Set the user's name for personalized dialogue (empty clears it).
+ * @param {object} state
+ * @param {string} name
+ */
+export function setUserName(state, name) {
+  const cleaned = String(name || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, USER_NAME_MAX);
+  return { ...state, userName: cleaned };
 }

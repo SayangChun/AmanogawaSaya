@@ -6,7 +6,7 @@ import {
   createZoneTracker,
   isZonePosesEnabled,
 } from "./character/screen-zone.js";
-import { loadState, saveState, gainAffinity } from "./state.js";
+import { loadState, saveState, gainAffinity, setUserName } from "./state.js";
 
 const app = document.querySelector("#app");
 
@@ -95,6 +95,9 @@ const dom = {
   starsRow: /** @type {HTMLElement|null} */ (null),
   statInteractions: /** @type {HTMLElement|null} */ (null),
   statPeriod: /** @type {HTMLElement|null} */ (null),
+  nameInput: /** @type {HTMLInputElement|null} */ (null),
+  nameStatus: /** @type {HTMLElement|null} */ (null),
+  nameSave: /** @type {HTMLElement|null} */ (null),
 };
 
 function cacheDom() {
@@ -115,6 +118,9 @@ function cacheDom() {
   dom.starsRow = document.querySelector(".stars-row");
   dom.statInteractions = document.querySelector("#stat-interactions");
   dom.statPeriod = document.querySelector("#stat-period");
+  dom.nameInput = document.querySelector("#user-name-input");
+  dom.nameStatus = document.querySelector("#name-status");
+  dom.nameSave = document.querySelector("#name-save");
 }
 
 const zoneTracker = createZoneTracker({
@@ -128,7 +134,7 @@ const motion = createMotionController({
   getLastZoneId: () => zoneTracker.getZoneId(),
   onZoneSit: (_zoneId) => {
     if (bubbleOpen || Math.random() >= 0.15) return;
-    const line = speak("zoneSit", { affinity: state.affinity });
+    const line = speakState("zoneSit");
     currentLine = line.text;
     openBubble(3500);
     updateBubbleDom();
@@ -144,7 +150,7 @@ const wander = createWanderController({
   isBlocked: () => isDragging || pointerArmed,
   onRoamStart: (_kind) => {
     if (Math.random() < 0.15 && !bubbleOpen) {
-      const line = speak(timeBucket(), { affinity: state.affinity });
+      const line = speakState(timeBucket());
       currentLine = line.text;
       openBubble(4500);
     }
@@ -188,7 +194,7 @@ async function finishDragWithZone(opts = {}) {
     if ((z.startsWith("corner-b") || z === "edge-bottom") && Math.random() < 0.35) {
       motion.playBehavior("settleCorner", { force: true, holdMs: 3500 });
       if (Math.random() < 0.15 && !bubbleOpen) {
-        const line = speak("zoneSit", { affinity: state.affinity });
+        const line = speakState("zoneSit");
         currentLine = line.text;
         openBubble(3500);
         updateBubbleDom();
@@ -450,6 +456,15 @@ function persist() {
 }
 
 /**
+ * speak() with the current affinity + userName so Saya can call the user by name.
+ * @param {string} scene
+ * @param {{ affinityGain?: number }} [extra]
+ */
+function speakState(scene, extra = {}) {
+  return speak(scene, { affinity: state.affinity, userName: state.userName, ...extra });
+}
+
+/**
  * Collapse dock / compact (used by tray force-compact path).
  */
 function collapseToCompact() {
@@ -500,12 +515,12 @@ function applyAffinityGain(amount) {
  */
 function maybeAppendAffinityMilestone(before, gained) {
   if (!gained || state.affinity % 20 !== 0) return;
-  const extra = speak("affinityUp", { affinity: state.affinity });
+  const extra = speakState("affinityUp");
   currentLine = `${currentLine}\n${extra.text}`;
 }
 
 function say(scene, { affinityGain = 0 } = {}) {
-  const line = speak(scene, { affinity: state.affinity });
+  const line = speakState(scene);
   currentScene = scene;
   currentLine = line.text;
 
@@ -543,6 +558,20 @@ function updateAffinityDom() {
   if (dom.statInteractions) dom.statInteractions.textContent = String(state.totalInteractions || 0);
   if (dom.statPeriod) {
     dom.statPeriod.textContent = TIME_BUCKET_LABELS[timeBucket()] || "此刻";
+  }
+}
+
+/** Keep the name input / status / save button in sync with state. */
+function updateNameDom() {
+  if (dom.nameInput) {
+    dom.nameInput.value = state.userName || "";
+  }
+  if (dom.nameStatus) {
+    dom.nameStatus.textContent = state.userName ? `已记住·${state.userName}` : "未告诉";
+    dom.nameStatus.classList.toggle("has-name", Boolean(state.userName));
+  }
+  if (dom.nameSave) {
+    dom.nameSave.textContent = state.userName ? "改" : "记住";
   }
 }
 
@@ -659,7 +688,10 @@ async function toggleDockStats(show = !dockStatsOpen) {
   updateDockStatsPanel();
   await correctPetFeetScreenY(feetY);
   await correctPetBodyScreenX(bodyX);
-  if (dockStatsOpen) updateAffinityDom();
+  if (dockStatsOpen) {
+    updateAffinityDom();
+    updateNameDom();
+  }
   applyMouseIgnore(false);
 }
 
@@ -705,7 +737,7 @@ function speakAndShow(opts) {
   }
 
   if (opts.scene) {
-    const line = speak(opts.scene, { affinity: state.affinity });
+    const line = speakState(opts.scene);
     currentScene = opts.scene === "menuSit" || opts.scene === "menuPose" ? "talk" : opts.scene;
     currentLine = line.text;
   } else {
@@ -728,6 +760,22 @@ async function handleDockAction(action) {
     case "stats-close":
       await toggleDockStats(false);
       break;
+    case "save-name": {
+      const input = dom.nameInput || document.querySelector("#user-name-input");
+      const raw = (input?.value || "").trim();
+      const hadName = Boolean(state.userName);
+      state = setUserName(state, raw);
+      persist();
+      updateNameDom();
+
+      const scene = state.userName ? "nameSet" : "nameForget";
+      currentScene = "talk";
+      currentLine = speakState(scene).text;
+      openBubble(6000);
+      updateBubbleDom();
+      if (state.userName && !hadName) spawnParticles(70, 90, "✨");
+      break;
+    }
     case "talk":
       say(Math.random() < 0.45 ? timeBucket() : "talk", { affinityGain: 1 });
       break;
@@ -882,6 +930,31 @@ function shellHtml() {
               <strong id="stat-period">${periodLabel}</strong>
             </div>
           </div>
+          <div class="name-card">
+            <div class="name-head">
+              <span class="label">我的名字</span>
+              <span class="name-status${state.userName ? " has-name" : ""}" id="name-status"
+                >${state.userName ? `已记住·${escapeHtml(state.userName)}` : "未告诉"}</span
+              >
+            </div>
+            <div class="name-row">
+              <input
+                type="text"
+                id="user-name-input"
+                class="name-input"
+                maxlength="12"
+                placeholder="告诉我你的名字…"
+                value="${escapeHtml(state.userName)}"
+                autocomplete="off"
+                spellcheck="false"
+                aria-label="告诉沙夜你的名字"
+              />
+              <button class="name-save" data-dock-action="save-name" id="name-save" type="button" title="告诉沙夜你的名字">
+                ${state.userName ? "改" : "记住"}
+              </button>
+            </div>
+            <p class="name-hint">告诉沙夜名字后，她偶尔会在对话里呼唤你。</p>
+          </div>
         </div>
 
         <div class="dock-actions" role="group" aria-label="快捷操作">
@@ -985,6 +1058,16 @@ function bind() {
         await toggleDock(false, { clientX: e.clientX, clientY: e.clientY });
       }
     });
+
+    const nameInput = dom.nameInput || dock.querySelector?.("#user-name-input");
+    if (nameInput) {
+      nameInput.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter") return;
+        e.stopPropagation();
+        handleDockAction("save-name");
+      });
+      nameInput.addEventListener("pointerdown", (e) => e.stopPropagation());
+    }
   }
 
   if (pet) {
@@ -1200,6 +1283,7 @@ function paint() {
   updateDockWanderText();
   updateDockStatsPanel();
   updateAffinityDom();
+  updateNameDom();
 }
 
 function boot() {
@@ -1208,9 +1292,7 @@ function boot() {
   app.classList.add("mode-compact");
 
   const greetingScene = timeBucket();
-  const line = speak(Math.random() < 0.5 ? "boot" : greetingScene, {
-    affinity: state.affinity,
-  });
+  const line = speakState(Math.random() < 0.5 ? "boot" : greetingScene);
   currentScene = line.scene;
   currentLine = line.text;
   openBubble(10000);

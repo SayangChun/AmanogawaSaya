@@ -78,3 +78,93 @@
   font-size: 0.95rem;
   font-variant-numeric: tabular-nums;
 }
+
+/* ===== User name (tell Saya your name for personalized dialogue) ===== */
+.name-card {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line);
+}
+
+.name-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.name-head .label {
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.name-status {
+  font-size: 0.6rem;
+  color: var(--muted);
+  max-width: 9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.name-status.has-name {
+  color: var(--ribbon);
+}
+
+.name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.name-input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--text);
+  font-size: 0.72rem;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.name-input::placeholder {
+  color: var(--muted);
+}
+
+.name-input:focus {
+  outline: none;
+  border-color: var(--ribbon);
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.name-save {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(155, 189, 255, 0.25);
+  background: rgba(155, 189, 255, 0.18);
+  color: var(--accent);
+  font-size: 0.68rem;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.name-save:hover {
+  background: rgba(155, 189, 255, 0.3);
+  border-color: rgba(155, 189, 255, 0.45);
+}
+
+.name-hint {
+  margin: 6px 0 0;
+  font-size: 0.58rem;
+  line-height: 1.4;
+  color: var(--muted);
+}

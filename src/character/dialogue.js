@@ -390,6 +390,24 @@ const LINES = {
     "……趴着也不错。",
     "就这样躺一会儿。……",
   ],
+  /** 用户刚告诉沙夜自己的名字 */
+  nameSet: [
+    "{name}……嗯，我记住了。这是会写进我星图里的名字。",
+    "{name}。……说起来，这个名字念起来，和夜风一样轻呢。",
+    "{name}，我记住了。从今天起，你也是我夜空里的一颗星。",
+    "……{name}。嗯，不会忘记的。你是我最想记住的名字。",
+    "{name}！……我是不是喊得太大声了？……只是，有点高兴。",
+    "……{name}。我会把它记在望远镜的镜筒上，天天看得见。",
+    "{name}……谢谢告诉我。下次想叫你的时候，我会很开心的。",
+    "……{name}，嗯。这个名字，和今晚的星星很配。",
+  ],
+  /** 用户清空 / 收回名字 */
+  nameForget: [
+    "嗯……那我就先记在心里，等你想告诉我的时候再说。",
+    "没关系，名字不急。想让我叫你的时候，随时告诉我。",
+    "好的……那还是先叫你「你」吧。……但我会等着的。",
+    "……嗯，我尊重你的选择。不论如何，你都在这里。",
+  ],
 };
 
 const WARM_SUFFIXES = [
@@ -409,6 +427,37 @@ const WARM_SUFFIXES = [
   "无论去哪里，我都想跟着你。",
   "你是我心中独一无二的那颗极星。",
 ];
+
+/** 记住名字后的个性化后缀——{name} 会在说话时替换成用户名字 */
+const NAME_SUFFIXES = [
+  "……{name}，你也辛苦了。",
+  "……是{name}在我身边呢。",
+  "……{name}，有你在，我很安心。",
+  "……{name}，我会一直在这里。",
+  "……{name}，你是我今晚最亮的星。",
+  "……要记得照顾好自己哦，{name}。",
+  "……{name}，我们就这样慢慢来。",
+  "……能遇见{name}，是我的幸运。",
+  "……{name}，今天也请多关照。",
+  "……{name}，谢谢你陪着我。",
+];
+
+/** 记住了名字后，这些场景偶尔会带上 {name} 的呼唤 */
+const NAMEABLE_SCENES = new Set([
+  "boot",
+  "tap",
+  "talk",
+  "praise",
+  "dawn",
+  "morning",
+  "forenoon",
+  "noon",
+  "afternoon",
+  "evening",
+  "earlyNight",
+  "night",
+  "lateNight",
+]);
 
 /**
  * Shuffle Bag (不重复抽牌包) 机制
@@ -457,10 +506,11 @@ export function timeBucket(date = new Date()) {
 
 /**
  * @param {string} scene
- * @param {{ affinity?: number, forceTime?: boolean }} [opts]
+ * @param {{ affinity?: number, forceTime?: boolean, userName?: string }} [opts]
  */
 export function speak(scene, opts = {}) {
   const affinity = opts.affinity ?? 0;
+  const userName = String(opts.userName || "").trim();
   const rank = getAffinityRank(affinity);
 
   let targetScene = scene;
@@ -475,6 +525,13 @@ export function speak(scene, opts = {}) {
   }
 
   let text = pickWithoutRepeat(pool, targetScene);
+
+  if (userName && scene === "nameSet") {
+    text = text.replaceAll("{name}", userName);
+  } else if (userName && NAMEABLE_SCENES.has(scene) && Math.random() < 0.18) {
+    const suffix = pickWithoutRepeat(NAME_SUFFIXES, "name_suffix");
+    text = `${text} ${suffix.replaceAll("{name}", userName)}`;
+  }
 
   if (rank.value >= 60 && Math.random() < 0.25 && ["tap", "talk", "praise"].includes(scene)) {
     const warm = pickWithoutRepeat(WARM_SUFFIXES, "warm_suffix");
