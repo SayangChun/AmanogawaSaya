@@ -259,20 +259,20 @@ const WEIGHTS = {
 };
 
 /**
- * Zone roam bias. Keep walk rare everywhere; open space is slightly livelier
- * but still mostly hops / idle. Edges/corners prefer staying put.
+ * Zone roam bias. She takes short walks now and then everywhere; open space
+ * is liveliest, edges/corners settle more but still move occasionally.
  * @type {Record<ZoneId, { roamChanceMul: number, walkVsHop: number, preferDir: number|null }>}
  */
 const ROAM_BIAS = {
-  open: { roamChanceMul: 0.9, walkVsHop: 0.35, preferDir: null },
-  "edge-left": { roamChanceMul: 0.65, walkVsHop: 0.45, preferDir: 1 },
-  "edge-right": { roamChanceMul: 0.65, walkVsHop: 0.45, preferDir: -1 },
-  "edge-bottom": { roamChanceMul: 0.55, walkVsHop: 0.4, preferDir: null },
-  "edge-top": { roamChanceMul: 0.45, walkVsHop: 0.4, preferDir: null },
-  "corner-bl": { roamChanceMul: 0.4, walkVsHop: 0.35, preferDir: 1 },
-  "corner-br": { roamChanceMul: 0.4, walkVsHop: 0.35, preferDir: -1 },
-  "corner-tl": { roamChanceMul: 0.35, walkVsHop: 0.3, preferDir: 1 },
-  "corner-tr": { roamChanceMul: 0.35, walkVsHop: 0.3, preferDir: -1 },
+  open: { roamChanceMul: 1.1, walkVsHop: 0.6, preferDir: null },
+  "edge-left": { roamChanceMul: 0.85, walkVsHop: 0.6, preferDir: 1 },
+  "edge-right": { roamChanceMul: 0.85, walkVsHop: 0.6, preferDir: -1 },
+  "edge-bottom": { roamChanceMul: 0.7, walkVsHop: 0.55, preferDir: null },
+  "edge-top": { roamChanceMul: 0.6, walkVsHop: 0.5, preferDir: null },
+  "corner-bl": { roamChanceMul: 0.55, walkVsHop: 0.5, preferDir: 1 },
+  "corner-br": { roamChanceMul: 0.55, walkVsHop: 0.5, preferDir: -1 },
+  "corner-tl": { roamChanceMul: 0.45, walkVsHop: 0.45, preferDir: 1 },
+  "corner-tr": { roamChanceMul: 0.45, walkVsHop: 0.45, preferDir: -1 },
 };
 
 export function isZonePosesEnabled() {
@@ -674,7 +674,7 @@ export function createZoneTracker(deps) {
     if (!snap) {
       // Match open-zone / wander defaults — avoid accidental walk spam when
       // IPC snapshot is cold or timed out.
-      return { roamChanceMul: 1, walkVsHop: 0.35, preferDir: null, zoneId: null };
+      return { roamChanceMul: 1, walkVsHop: 0.6, preferDir: null, zoneId: null };
     }
     return { ...snap.roam, zoneId: snap.zoneId };
   }

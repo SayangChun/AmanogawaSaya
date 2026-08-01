@@ -81,13 +81,29 @@ def key_black_bg(im: Image.Image, thr: int = 18) -> Image.Image:
     return im
 
 
-def fit_canvas(im: Image.Image, size: tuple[int, int] = CANVAS) -> Image.Image:
+def fit_canvas(im: Image.Image, size: tuple[int, int] = CANVAS, consistent_height: bool = False) -> Image.Image:
+    """Fit image to canvas with consistent character height across poses.
+    
+    Args:
+        im: Input image
+        size: Canvas size (width, height)
+        consistent_height: If True, scale all poses to same height ratio (95% of canvas).
+                          If False, fit within canvas preserving aspect ratio (original behavior).
+    """
     im = im.convert("RGBA")
     bbox = im.getbbox()
     if bbox:
         im = im.crop(bbox)
     tw, th = size
-    scale = min(tw / im.width, th / im.height)
+    
+    if consistent_height:
+        # Scale to 95% of canvas height for consistent visual size
+        target_h = int(th * 0.95)
+        scale = target_h / im.height
+    else:
+        # Original behavior: fit within canvas
+        scale = min(tw / im.width, th / im.height)
+    
     nw = max(1, int(im.width * scale))
     nh = max(1, int(im.height * scale))
     im = im.resize((nw, nh), Image.Resampling.LANCZOS)
@@ -242,10 +258,10 @@ def recolor_shy_blush(im: Image.Image) -> Image.Image:
     return Image.fromarray(arr, "RGBA")
 
 
-def process(src: Path, thr: int = 18, shy_blush: bool = False) -> Image.Image:
+def process(src: Path, thr: int = 18, shy_blush: bool = False, consistent_height: bool = False) -> Image.Image:
     im = key_black_bg(Image.open(src), thr=thr)
     im = strip_pink_stroke(im)
-    im = fit_canvas(im)
+    im = fit_canvas(im, consistent_height=consistent_height)
     if shy_blush:
         im = recolor_shy_blush(im)
     return im
@@ -268,12 +284,12 @@ def save_seq(name: str, frames: list[Image.Image]) -> list[str]:
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     print("Processing poses...")
-    poses = {k: process(v, shy_blush=(k == "shy")) for k, v in POSE_SRC.items()}
-    base = process(BASE, thr=12)
-    soft = process(SOFT, thr=12)
-    smile = process(SMILE, thr=12)
+    poses = {k: process(v, shy_blush=(k == "shy"), consistent_height=True) for k, v in POSE_SRC.items()}
+    base = process(BASE, thr=12, consistent_height=True)
+    soft = process(SOFT, thr=12, consistent_height=True)
+    smile = process(SMILE, thr=12, consistent_height=True)
     try:
-        process(WORRIED, thr=12)  # available if later needed
+        process(WORRIED, thr=12, consistent_height=True)  # available if later needed
     except OSError:
         pass
 

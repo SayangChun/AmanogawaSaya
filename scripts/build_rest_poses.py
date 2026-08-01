@@ -68,13 +68,13 @@ def main() -> None:
         if not src.exists():
             print(f"  skip missing {k}: {src.name}")
             continue
-        poses[k] = process(src, thr=18)
+        poses[k] = process(src, thr=18, consistent_height=True)
         print(f"  ok {k}")
 
     if "prone_soft" not in poses and "prone_main" in poses:
         poses["prone_soft"] = poses["prone_main"]
 
-    base = process(OUT / "_base.png", thr=12)
+    base = process(OUT / "_base.png", thr=12, consistent_height=True)
     # Transition helpers from existing packs
     sit_hold = Image_open_rgba(OUT / "sit" / "03.png")
     hop_pre = Image_open_rgba(OUT / "hop" / "00.png")

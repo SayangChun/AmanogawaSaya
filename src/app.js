@@ -759,10 +759,15 @@ async function handleDockAction(action) {
       spawnParticles(70, 90, "✨");
       break;
     }
-    case "rest":
-      // 休息：随机坐下 / 换姿势
-      await handleDockAction(Math.random() < 0.5 ? "sit" : "pose");
+    case "rest": {
+      // 休息：随机坐下 / 换姿势，至少歇一分钟以上
+      const restMs = 65_000;
+      const scene = Math.random() < 0.5 ? "menuSit" : "menuPose";
+      motion.lockFor(restMs);
+      speakAndShow({ scene, affinityGain: 1, bubbleMs: 5000 });
+      motion.playBehavior(scene, { force: true, holdMs: restMs });
       break;
+    }
     case "sit": {
       motion.lockFor(6000);
       speakAndShow({ scene: "menuSit", affinityGain: 1, bubbleMs: 5000 });

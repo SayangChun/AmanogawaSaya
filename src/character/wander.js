@@ -6,22 +6,21 @@
 /** px per second while walking (screen space) */
 const WALK_SPEED = 72;
 /**
- * Roam planner cadence — intentionally sparse so she mostly stays put
- * with idle fidgets, rather than pacing the desktop.
- * Mean check ≈ 32s; with chance × walk bias, screen walks are rare (~few min).
+ * Roam planner cadence — she takes a small walk now and then, but not
+ * constantly. Mean check ≈ 19s; walks stay short (a few seconds each).
  */
-const ROAM_MIN_MS = 18000;
-const ROAM_MAX_MS = 48000;
+const ROAM_MIN_MS = 12000;
+const ROAM_MAX_MS = 26000;
 /** chance to actually start a roam when timer fires */
-const ROAM_CHANCE = 0.38;
+const ROAM_CHANCE = 0.6;
 /**
  * Among roams: probability of walk (window translates) vs hop (in place).
- * Prefer hop so "alive" moments don't mean constant screen walking.
+ * Slight preference for walk so she visibly moves, hops keep it varied.
  */
-const WALK_VS_HOP = 0.32;
+const WALK_VS_HOP = 0.55;
 /** min / max walk duration (ms) when planner starts a walk */
-const WALK_MS_MIN = 2200;
-const WALK_MS_MAX = 4200;
+const WALK_MS_MIN = 2000;
+const WALK_MS_MAX = 3800;
 /** keep a small safety margin so the pet does not press into the edge */
 const EDGE_MARGIN_PX = 18;
 

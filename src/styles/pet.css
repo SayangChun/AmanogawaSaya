@@ -284,7 +284,7 @@
 }
 
 .act-lie .pet-body {
-  animation: body-sleep-soft 5.2s ease-in-out infinite;
+  animation: body-lie 5.2s ease-in-out infinite;
   filter: drop-shadow(0 4px 7px rgba(0, 0, 0, 0.38)) brightness(0.97);
 }
 
@@ -294,7 +294,7 @@
 }
 
 .act-prone .pet-body {
-  animation: body-breathe 3.8s ease-in-out infinite;
+  animation: body-prone 3.8s ease-in-out infinite;
 }
 
 .act-stretch .pet-body,
@@ -882,6 +882,28 @@
   }
   50% {
     transform: translate3d(0, 0, 0);
+  }
+}
+
+/* Lie pose: scale up to match standing character height (768/665 = 1.155) */
+@keyframes body-lie {
+  0%,
+  100% {
+    transform: translate3d(0, 2px, 0) scale(1.155);
+  }
+  50% {
+    transform: translate3d(0, 0, 0) scale(1.155);
+  }
+}
+
+/* Prone pose: scale up to match standing character height (768/546 = 1.407) */
+@keyframes body-prone {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1.407);
+  }
+  50% {
+    transform: translate3d(0, -1px, 0) scale(1.407);
   }
 }
 
