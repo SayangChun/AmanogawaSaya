@@ -5,6 +5,10 @@
 
 /** px per second while walking (screen space) */
 const WALK_SPEED = 72;
+/** px per second of a vertical (straight climb / descend) walk */
+const WALK_VERT_SPEED = 48;
+/** chance an open-space walk goes vertical (climb / descend) instead of level */
+const VERT_WALK_CHANCE = 0.35;
 /**
  * Roam planner cadence — she takes a small walk now and then, but not
  * constantly. Mean check ≈ 19s; walks stay short (a few seconds each).
@@ -94,7 +98,7 @@ export function createWanderController(deps) {
   /** @type {number | null} */
   let rafId = null;
   let lastTick = 0;
-  /** @type {null | { vx: number, until: number, kind: string }} */
+  /** @type {null | { vx: number, vy: number, until: number, kind: string }} */
   let locomotion = null;
   /**
    * Sub-pixel remainder for screen movement.
@@ -133,7 +137,7 @@ export function createWanderController(deps) {
   function applyMove(dt) {
     if (!locomotion || dt <= 0) return;
     moveCarryX += locomotion.vx * dt;
-    moveCarryY += 0;
+    moveCarryY += locomotion.vy * dt;
 
     const dx = moveCarryX >= 0 ? Math.floor(moveCarryX) : Math.ceil(moveCarryX);
     const dy = moveCarryY >= 0 ? Math.floor(moveCarryY) : Math.ceil(moveCarryY);
@@ -220,6 +224,7 @@ export function createWanderController(deps) {
         locomotion = {
           kind: "walk",
           vx: dir * WALK_SPEED,
+          vy: 0,
           until: Date.now() + hold + 80,
         };
       } else {
@@ -243,47 +248,87 @@ export function createWanderController(deps) {
 
   /**
    * Pick walk direction / duration from desktop free space.
+   * A walk is strictly **horizontal** (level, facing flips with direction) or
+   * strictly **vertical** (straight climb up / descend down, facing unchanged) —
+   * never diagonal. Pinned to the ground edge → climb; pinned to the top edge →
+   * descend; open space → mostly level, occasionally vertical.
    * @param {number} preferredDir
    * @param {number} duration
    */
   async function resolveWalkPlan(preferredDir, duration) {
     let dir = preferredDir;
+    /** vertical leg: -1 climb up, 0 level, +1 descend down */
+    let vdir = 0;
     let ms = duration;
 
     try {
       if (getBounds && getWorkArea) {
         const [bounds, area] = await Promise.all([getBounds(), getWorkArea()]);
         if (bounds && area) {
-          // Horizontal ground movement: decide from the window edges, not center,
-          // so she turns before the desktop clamp makes her jitter in place.
           const leftRoom = Math.max(0, bounds.x - area.x - EDGE_MARGIN_PX);
           const rightRoom = Math.max(
             0,
             area.x + area.width - (bounds.x + bounds.width) - EDGE_MARGIN_PX,
           );
+          const aboveRoom = Math.max(0, bounds.y - area.y - EDGE_MARGIN_PX);
+          const belowRoom = Math.max(
+            0,
+            area.y + area.height - (bounds.y + bounds.height) - EDGE_MARGIN_PX,
+          );
 
-          // Prefer the side with more room when cramped; otherwise keep facing.
-          if (leftRoom < 40 && rightRoom > leftRoom) dir = 1;
-          else if (rightRoom < 40 && leftRoom > rightRoom) dir = -1;
-          else if (leftRoom < 8 && rightRoom < 8) {
-            // Fully pinched — still walk in place briefly so the clip is visible.
-            dir = preferredDir || 1;
+          // Pick the movement mode: vertical climb/descend or level walk.
+          if (belowRoom < 40 && aboveRoom > belowRoom) {
+            // Pinned to the ground edge → climb straight up (mostly).
+            vdir = Math.random() < 0.6 ? -1 : 0;
+          } else if (aboveRoom < 40 && belowRoom > aboveRoom) {
+            // Pinned to the top edge → come straight down (mostly).
+            vdir = Math.random() < 0.6 ? 1 : 0;
+          } else if (Math.random() < VERT_WALK_CHANCE) {
+            // Open space: occasional straight vertical walk.
+            vdir = Math.random() < 0.5 ? -1 : 1;
           }
 
-          const room = dir < 0 ? leftRoom : rightRoom;
-          if (room > 8) {
-            const maxMs = Math.max(900, Math.min(WALK_MS_MAX, (room / WALK_SPEED) * 1000));
-            ms = Math.min(ms, maxMs);
-          } else {
-            // Almost no room that way: flip and use the other side if possible.
-            const altDir = -dir;
-            const altRoom = altDir < 0 ? leftRoom : rightRoom;
-            if (altRoom > room) {
-              dir = altDir;
-              const maxMs = Math.max(900, Math.min(WALK_MS_MAX, (altRoom / WALK_SPEED) * 1000));
+          if (vdir !== 0) {
+            const vRoom = vdir < 0 ? aboveRoom : belowRoom;
+            if (vRoom > 8) {
+              // Cap duration by vertical room so she stops before the work-area
+              // top/bottom edge clamps her in place.
+              const maxMs = Math.max(
+                900,
+                Math.min(WALK_MS_MAX, (vRoom / WALK_VERT_SPEED) * 1000),
+              );
               ms = Math.min(ms, maxMs);
             } else {
-              ms = Math.min(ms, 1200);
+              // No vertical room that way — fall back to a level walk.
+              vdir = 0;
+            }
+          }
+
+          if (vdir === 0) {
+            // Level walk: decide from the window edges, not center, so she turns
+            // before the desktop clamp makes her jitter in place.
+            if (leftRoom < 40 && rightRoom > leftRoom) dir = 1;
+            else if (rightRoom < 40 && leftRoom > rightRoom) dir = -1;
+            else if (leftRoom < 8 && rightRoom < 8) {
+              // Fully pinched — still walk in place briefly so the clip is visible.
+              dir = preferredDir || 1;
+            }
+
+            const room = dir < 0 ? leftRoom : rightRoom;
+            if (room > 8) {
+              const maxMs = Math.max(900, Math.min(WALK_MS_MAX, (room / WALK_SPEED) * 1000));
+              ms = Math.min(ms, maxMs);
+            } else {
+              // Almost no room that way: flip and use the other side if possible.
+              const altDir = -dir;
+              const altRoom = altDir < 0 ? leftRoom : rightRoom;
+              if (altRoom > room) {
+                dir = altDir;
+                const maxMs = Math.max(900, Math.min(WALK_MS_MAX, (altRoom / WALK_SPEED) * 1000));
+                ms = Math.min(ms, maxMs);
+              } else {
+                ms = Math.min(ms, 1200);
+              }
             }
           }
         }
@@ -292,7 +337,7 @@ export function createWanderController(deps) {
       // offline / no petApi — keep random dir
     }
 
-    return { dir, duration: ms };
+    return { dir, vdir, duration: ms };
   }
 
   /**
@@ -328,18 +373,22 @@ export function createWanderController(deps) {
     if (force ? isHardBlocked() : !canAutoRoam()) return false;
 
     const dir = plan.dir;
+    const vdir = plan.vdir || 0;
+    const vertical = vdir !== 0;
     duration = plan.duration;
 
-    // dir < 0 → move left + face left; dir > 0 → move right + face right
-    motion.setFacing(dir);
+    // Level walks face the travel direction; vertical climbs keep current facing.
+    if (!vertical) motion.setFacing(dir);
     // Clear sleep / sit context so fallback after walk is idle, not sleep.
     motion.setContext?.("");
-    const walkVx = dir * WALK_SPEED * (0.85 + Math.random() * 0.3);
+    const walkVx = vertical ? 0 : dir * WALK_SPEED * (0.85 + Math.random() * 0.3);
+    const walkVy = vertical ? vdir * WALK_VERT_SPEED * (0.5 + Math.random() * 0.5) : 0;
     const holdMs = Math.max(900, Math.round(duration));
 
     locomotion = {
       kind: "walk",
       vx: walkVx,
+      vy: walkVy,
       until: Date.now() + holdMs + 80,
     };
     moveCarryX = 0;
