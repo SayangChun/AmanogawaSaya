@@ -11,20 +11,20 @@ const WALK_VERT_SPEED = 48;
 const VERT_WALK_CHANCE = 0.35;
 /**
  * Roam planner cadence — she takes a small walk now and then, but not
- * constantly. Mean check ≈ 19s; walks stay short (a few seconds each).
+ * constantly. Mean check ≈ 31s; walks stay short (a few seconds each).
  */
-const ROAM_MIN_MS = 12000;
-const ROAM_MAX_MS = 26000;
+const ROAM_MIN_MS = 20000;
+const ROAM_MAX_MS = 42000;
 /** chance to actually start a roam when timer fires */
-const ROAM_CHANCE = 0.6;
+const ROAM_CHANCE = 0.45;
 /**
  * Among roams: probability of walk (window translates) vs hop (in place).
  * Slight preference for walk so she visibly moves, hops keep it varied.
  */
 const WALK_VS_HOP = 0.55;
 /** min / max walk duration (ms) when planner starts a walk */
-const WALK_MS_MIN = 2000;
-const WALK_MS_MAX = 3800;
+const WALK_MS_MIN = 3200;
+const WALK_MS_MAX = 5600;
 /** keep a small safety margin so the pet does not press into the edge */
 const EDGE_MARGIN_PX = 18;
 
