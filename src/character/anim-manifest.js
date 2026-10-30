@@ -18,7 +18,7 @@ export const ANIM_MANIFEST = {
         "./assets/animations/idle/06.png",
         "./assets/animations/idle/07.png"
       ],
-      "fps": 2.5,
+      "fps": 3.2,
       "loop": true,
       "duration": null,
       "holdLast": false
@@ -32,7 +32,7 @@ export const ANIM_MANIFEST = {
         "./assets/animations/breathe/04.png",
         "./assets/animations/breathe/05.png"
       ],
-      "fps": 2,
+      "fps": 3,
       "loop": true,
       "duration": 4500,
       "holdLast": false
@@ -45,7 +45,7 @@ export const ANIM_MANIFEST = {
         "./assets/animations/sway/03.png",
         "./assets/animations/sway/04.png"
       ],
-      "fps": 2,
+      "fps": 2.8,
       "loop": false,
       "duration": 4200,
       "holdLast": false
@@ -56,7 +56,7 @@ export const ANIM_MANIFEST = {
         "./assets/animations/look/01.png",
         "./assets/animations/look/02.png"
       ],
-      "fps": 1.5,
+      "fps": 2.2,
       "loop": false,
       "duration": 3200,
       "holdLast": false
@@ -121,7 +121,7 @@ export const ANIM_MANIFEST = {
         "./assets/animations/calm/01.png",
         "./assets/animations/calm/02.png"
       ],
-      "fps": 1.5,
+      "fps": 2.2,
       "loop": false,
       "duration": 4200,
       "holdLast": false
@@ -132,7 +132,7 @@ export const ANIM_MANIFEST = {
         "./assets/animations/coat/01.png",
         "./assets/animations/coat/02.png"
       ],
-      "fps": 1.5,
+      "fps": 2.2,
       "loop": false,
       "duration": 4200,
       "holdLast": false
@@ -143,7 +143,7 @@ export const ANIM_MANIFEST = {
         "./assets/animations/soft/01.png",
         "./assets/animations/soft/02.png"
       ],
-      "fps": 1.5,
+      "fps": 2.2,
       "loop": false,
       "duration": 4000,
       "holdLast": false
@@ -155,7 +155,7 @@ export const ANIM_MANIFEST = {
         "./assets/animations/smile/02.png",
         "./assets/animations/smile/03.png"
       ],
-      "fps": 2,
+      "fps": 2.6,
       "loop": false,
       "duration": 3400,
       "holdLast": false
@@ -168,7 +168,7 @@ export const ANIM_MANIFEST = {
         "./assets/animations/nod/03.png",
         "./assets/animations/nod/04.png"
       ],
-      "fps": 3,
+      "fps": 3.6,
       "loop": false,
       "duration": 2000,
       "holdLast": false
@@ -181,7 +181,7 @@ export const ANIM_MANIFEST = {
         "./assets/animations/talk/03.png",
         "./assets/animations/talk/04.png"
       ],
-      "fps": 2.5,
+      "fps": 3.6,
       "loop": true,
       "duration": 3200,
       "holdLast": false
@@ -207,7 +207,7 @@ export const ANIM_MANIFEST = {
         "./assets/animations/alert/02.png",
         "./assets/animations/alert/03.png"
       ],
-      "fps": 3,
+      "fps": 3.8,
       "loop": false,
       "duration": 2600,
       "holdLast": false
@@ -219,7 +219,7 @@ export const ANIM_MANIFEST = {
         "./assets/animations/shy/02.png",
         "./assets/animations/shy/03.png"
       ],
-      "fps": 2,
+      "fps": 2.8,
       "loop": false,
       "duration": 3000,
       "holdLast": false
@@ -256,7 +256,7 @@ export const ANIM_MANIFEST = {
         "./assets/animations/wave/03.png",
         "./assets/animations/wave/04.png"
       ],
-      "fps": 3,
+      "fps": 3.8,
       "loop": false,
       "duration": 2600,
       "holdLast": false

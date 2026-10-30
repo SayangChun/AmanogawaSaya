@@ -256,6 +256,74 @@ export const BEHAVIORS = {
       { weight: 0.6, chain: ["lie", "breathe"] },
     ],
   },
+
+  // —— 伴侣对话（chat / local engine 驱动）——
+  /** 从记忆里想起用户说过的事：先想，再轻轻回应 */
+  recall: {
+    variants: [
+      { weight: 2.0, chain: ["think", "soft"] },
+      { weight: 1.5, chain: ["think", "calm"] },
+      { weight: 1.2, chain: ["look", "soft"] },
+      { weight: 1.0, chain: ["peek", "soft"] },
+    ],
+  },
+  /** 安慰：轻、慢，不夸张 */
+  comfort: {
+    variants: [
+      { weight: 2.0, chain: ["soft", "breathe"] },
+      { weight: 1.6, chain: ["soft"] },
+      { weight: 1.3, chain: ["calm", "soft"] },
+      { weight: 1.0, chain: ["breathe", "soft"] },
+      { weight: 0.8, chain: ["look", "soft"] },
+    ],
+  },
+  /** 闲聊倾听：边听边轻轻点头/思考 */
+  ponder: {
+    variants: [
+      { weight: 2.2, chain: ["talk"] },
+      { weight: 1.6, chain: ["nod", "talk"] },
+      { weight: 1.3, chain: ["think", "talk"] },
+      { weight: 1.0, chain: ["soft", "talk"] },
+      { weight: 0.8, chain: ["look", "talk"] },
+    ],
+  },
+  /** 久别重逢：先惊讶，再笑，最后安静下来 */
+  missYou: {
+    variants: [
+      { weight: 2.0, chain: ["alert", "smile"] },
+      { weight: 1.6, chain: ["bounce", "smile"] },
+      { weight: 1.3, chain: ["wave", "smile"] },
+      { weight: 1.0, chain: ["alert", "soft"] },
+      { weight: 0.8, chain: ["giggle", "soft"] },
+    ],
+  },
+  /** 约定到期提起：先想起来，再问 */
+  followUp: {
+    variants: [
+      { weight: 2.0, chain: ["think", "talk"] },
+      { weight: 1.6, chain: ["alert", "talk"] },
+      { weight: 1.2, chain: ["look", "soft"] },
+      { weight: 1.0, chain: ["peek", "talk"] },
+    ],
+  },
+  /** 被问「你是谁」：打招呼式回应 */
+  aboutHer: {
+    variants: [
+      { weight: 2.0, chain: ["wave", "smile"] },
+      { weight: 1.6, chain: ["nod", "smile"] },
+      { weight: 1.2, chain: ["soft", "nod"] },
+      { weight: 1.0, chain: ["smile"] },
+    ],
+  },
+  /** 道别：点头，目送 */
+  farewell: {
+    variants: [
+      { weight: 2.0, chain: ["nod"] },
+      { weight: 1.6, chain: ["soft", "nod"] },
+      { weight: 1.2, chain: ["wave"] },
+      { weight: 1.0, chain: ["smile", "nod"] },
+    ],
+  },
 };
 
 /**

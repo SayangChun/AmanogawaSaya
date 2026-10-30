@@ -14,7 +14,8 @@
 /* Opt-in only: empty stage / glow / stars must not own a hit rectangle */
 .shell .pet-hit,
 .shell .bubble:not(.closed),
-.shell .dock {
+.shell .dock,
+.shell .chat {
   pointer-events: auto;
 }
 
@@ -80,6 +81,10 @@
   font-size: 0.88rem;
   line-height: 1.65;
   color: var(--text);
+  /* 智能回复可能比模板台词长：限高防撑破 speak 窗口 */
+  max-height: 9.5em;
+  overflow-y: auto;
+  scrollbar-width: none;
 }
 
 /* ===== Character stage — full-body VPet ===== */
@@ -226,6 +231,9 @@
   visibility: visible;
   z-index: 1;
 }
+
+/* 帧切换必须保持瞬时硬切：任何渐入/淡化都会让半透明粉边透出
+   桌面背景，高频动作切换时表现为晃眼的闪烁（实测教训，勿加回）。 */
 
 /* ===== Action polish (frames carry pose; CSS only subtle lift / shadow) ===== */
 /* Transform-origin stays at feet so motion feels grounded */
@@ -499,6 +507,9 @@
   animation: dock-sub-in 0.16s ease;
   transform-origin: center center;
   align-self: flex-end;
+  max-height: 100%;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 .dock-sub.closed {

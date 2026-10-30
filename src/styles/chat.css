@@ -1,0 +1,197 @@
+/* ===== 伴侣聊天（chat 窗口模式） =====
+   布局：窗口底部 64px 留给输入区（chat 模式 feet 上移 64px），
+   历史回显在输入行上方，气泡在更上方并放宽到接近窗口宽度。 */
+
+#chat-panel {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 6px;
+  display: none;
+  flex-direction: column;
+  gap: 5px;
+  pointer-events: auto;
+  z-index: 6;
+}
+
+.mode-chat #chat-panel {
+  display: flex;
+  animation: chat-in 0.2s ease;
+}
+
+@keyframes chat-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.chat-scroll {
+  max-height: 84px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px;
+  scrollbar-width: none;
+}
+
+.chat-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.chat-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.chat-input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 15px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-solid);
+  color: var(--text);
+  font-size: 0.8rem;
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+}
+
+.chat-input::placeholder {
+  color: var(--muted);
+}
+
+.chat-btn {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-solid);
+  color: var(--accent);
+  font-size: 0.8rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-btn:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.chat-btn.is-close {
+  color: var(--muted);
+}
+
+/* 历史消息 */
+.chat-msg {
+  max-width: 86%;
+  padding: 4px 9px;
+  border-radius: 12px;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  word-break: break-word;
+  white-space: pre-wrap;
+  animation: chat-msg-in 0.18s ease;
+}
+
+@keyframes chat-msg-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+
+.chat-msg.user {
+  align-self: flex-end;
+  background: var(--accent-soft);
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+  border-bottom-right-radius: 4px;
+}
+
+.chat-msg.saya {
+  align-self: flex-start;
+  background: var(--panel-solid);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-bottom-left-radius: 4px;
+}
+
+.chat-empty {
+  align-self: center;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+/* chat 模式下气泡放宽 */
+.mode-chat .bubble {
+  width: min(100%, 372px);
+}
+
+.mode-chat .bubble-text {
+  min-height: 1.4em;
+}
+
+/* 打字机光标 */
+.bubble-text.is-typing::after {
+  content: "▍";
+  color: var(--accent);
+  animation: caret-blink 0.9s steps(1) infinite;
+  margin-left: 1px;
+}
+
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* 事实卡（星轨面板内） */
+.facts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 4px;
+}
+
+.fact-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.68rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.fact-item .fact-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.fact-item .fact-forget {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  color: var(--danger);
+  font-size: 0.62rem;
+  line-height: 1;
+  border: 1px solid transparent;
+}
+
+.fact-item .fact-forget:hover {
+  border-color: var(--danger);
+}
+
+.facts-empty {
+  font-size: 0.68rem;
+  color: var(--muted);
+  margin-top: 4px;
+}

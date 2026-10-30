@@ -1,4 +1,7 @@
-import {
+// 注意：主进程必须用 CJS。Electron 43 起 ESM 的 import ... from "electron"
+// 会解析到 node_modules/electron 这个 npm stub（导出的是可执行文件路径），
+// 拿不到 app/BrowserWindow 等内置导出。require("electron") 才命中内置模块。
+const {
   app,
   BrowserWindow,
   ipcMain,
@@ -6,13 +9,11 @@ import {
   Tray,
   nativeImage,
   screen,
-} from "electron";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import fs from "node:fs";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+  powerMonitor,
+} = require("electron");
+const path = require("node:path");
+const fs = require("node:fs");
+const { createMemoryStore } = require("./src/memory/memory-store.js");
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null;
@@ -34,15 +35,20 @@ let windowDragging = false;
 /** Character column width (sprite + horizontal pad) while dock is open. */
 const BODY_COL = 132;
 
+/** @type {import("./src/memory/memory-store.js").ReturnType | null} */
+let memory = null;
+
 const WINDOW_MODES = {
   // Body only: pet-hit ~120×170 + minimal padding
   compact: { width: 136, height: 196 },
   // Bubble above body (short 1–2 line lines)
   speak: { width: 196, height: 272 },
-  // Body + vertical side dock (7 action buttons)
-  dock: { width: 204, height: 280 },
-  // Side dock + secondary stats submenu (affinity / counts)
-  dockStats: { width: 360, height: 280 },
+  // Body + vertical side dock (8 action buttons)
+  dock: { width: 204, height: 312 },
+  // Side dock + secondary stats submenu (affinity / counts / facts)
+  dockStats: { width: 360, height: 312 },
+  // Companion chat: bubble + scrollback + input row (feet lifted for input)
+  chat: { width: 420, height: 440 },
 };
 
 /**
@@ -466,23 +472,116 @@ function createTray() {
   });
 }
 
-app.whenReady().then(() => {
-  // Windows: group taskbar / toast notifications under a stable app id
-  if (process.platform === "win32") {
-    app.setAppUserModelId("com.amanogawa.saya.desktop-pet");
-  }
-
-  createWindow();
-  createTray();
-
-  ipcMain.handle("pet:focus", () => {
-    mainWindow?.show();
-    mainWindow?.focus();
+// Single instance: a companion should never exist twice on one desktop.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (!mainWindow) return;
+    if (mainWindow.isVisible()) mainWindow.focus();
+    else mainWindow.show();
   });
 
-  ipcMain.handle("pet:hide", () => {
-    mainWindow?.hide();
-  });
+  app.whenReady().then(() => {
+    // Windows: group taskbar / toast notifications under a stable app id
+    if (process.platform === "win32") {
+      app.setAppUserModelId("com.amanogawa.saya.desktop-pet");
+    }
+
+    memory = createMemoryStore({ dir: path.join(app.getPath("userData"), "saya") });
+
+    createWindow();
+    createTray();
+
+    ipcMain.handle("pet:focus", () => {
+      mainWindow?.show();
+      mainWindow?.focus();
+    });
+
+    ipcMain.handle("pet:hide", () => {
+      mainWindow?.hide();
+    });
+
+    /** —— 记忆层（主进程唯一写入口，renderer 经 IPC 访问） —— */
+    ipcMain.handle("memory:get-state", () => {
+      try {
+        return { ok: true, snapshot: memory?.snapshot() ?? null };
+      } catch (err) {
+        return { ok: false, error: String(err?.message || err) };
+      }
+    });
+
+    ipcMain.handle("memory:append-event", (_e, ev) => {
+      try {
+        return { ok: true, event: memory?.appendEvent(ev) ?? null };
+      } catch (err) {
+        return { ok: false, error: String(err?.message || err) };
+      }
+    });
+
+    ipcMain.handle("memory:add-fact", (_e, text, opts) => {
+      try {
+        return { ok: true, fact: memory?.addFact(text, opts || {}) ?? null };
+      } catch (err) {
+        return { ok: false, error: String(err?.message || err) };
+      }
+    });
+
+    ipcMain.handle("memory:remove-fact", (_e, id) => {
+      try {
+        return { ok: true, removed: memory?.removeFact(id) ?? false };
+      } catch (err) {
+        return { ok: false, error: String(err?.message || err) };
+      }
+    });
+
+    ipcMain.handle("memory:add-followup", (_e, input) => {
+      try {
+        return { ok: true, followUp: memory?.addFollowUp(input) ?? null };
+      } catch (err) {
+        return { ok: false, error: String(err?.message || err) };
+      }
+    });
+
+    ipcMain.handle("memory:complete-followup", (_e, id) => {
+      try {
+        return { ok: true, completed: memory?.completeFollowUp(id) ?? false };
+      } catch (err) {
+        return { ok: false, error: String(err?.message || err) };
+      }
+    });
+
+    ipcMain.handle("memory:due-followups", () => {
+      try {
+        return { ok: true, due: memory?.dueFollowUps() ?? [] };
+      } catch (err) {
+        return { ok: false, error: String(err?.message || err) };
+      }
+    });
+
+    ipcMain.handle("memory:update-mood", (_e, patch) => {
+      try {
+        return { ok: true, mood: memory?.updateMood(patch) ?? null };
+      } catch (err) {
+        return { ok: false, error: String(err?.message || err) };
+      }
+    });
+
+    ipcMain.handle("memory:append-journal", (_e, text) => {
+      try {
+        return { ok: true, entry: memory?.appendJournal(text) ?? null };
+      } catch (err) {
+        return { ok: false, error: String(err?.message || err) };
+      }
+    });
+
+    ipcMain.handle("memory:migrate-legacy", (_e, legacy) => {
+      try {
+        return { ok: true, result: memory?.migrateLegacy(legacy) ?? null };
+      } catch (err) {
+        return { ok: false, error: String(err?.message || err) };
+      }
+    });
 
   /** Relative move — fire-and-forget path preferred for drag smoothness. */
   ipcMain.on("pet:move-by", (_e, delta) => {
@@ -503,6 +602,34 @@ app.whenReady().then(() => {
     return display?.workArea ?? screen.getPrimaryDisplay().workArea;
   });
 
+  /** —— 直播感观察：系统输入空闲（她据此知道你在不在电脑前） —— */
+  ipcMain.handle("pet:idle-seconds", () => {
+    try {
+      return Number.isFinite(powerMonitor.getSystemIdleTime?.())
+        ? Math.max(0, Math.round(powerMonitor.getSystemIdleTime()))
+        : null;
+    } catch {
+      return null;
+    }
+  });
+
+  /**
+   * 锁屏 / 解锁 / 挂起 / 恢复 → 转发给渲染层（她对你的来留有反应）。
+   * 只在窗口存活时发送；powerMonitor 事件 app ready 后才可靠。
+   */
+  {
+    /** @param {string} type */
+    const forward = (type) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("pet:system-event", type);
+      }
+    };
+    powerMonitor.on("lock-screen", () => forward("lock-screen"));
+    powerMonitor.on("unlock-screen", () => forward("unlock-screen"));
+    powerMonitor.on("suspend", () => forward("suspend"));
+    powerMonitor.on("resume", () => forward("resume"));
+  }
+
   ipcMain.handle("pet:set-mode", (_e, mode, options) =>
     setMode(mode, options && typeof options === "object" ? options : {}),
   );
@@ -522,12 +649,13 @@ app.whenReady().then(() => {
       mainWindow.setIgnoreMouseEvents(false);
     }
   });
-});
+  });
 
-app.on("window-all-closed", (event) => {
-  event.preventDefault();
-});
+  app.on("window-all-closed", (event) => {
+    event.preventDefault();
+  });
 
-app.on("before-quit", () => {
-  isQuitting = true;
-});
+  app.on("before-quit", () => {
+    isQuitting = true;
+  });
+}

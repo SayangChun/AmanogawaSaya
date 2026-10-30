@@ -1,13 +1,13 @@
 {
-  "name": "amanogawa-saya-desktop-pet",
+  "name": "amanogawa-saya-companion",
   "private": true,
-  "version": "0.4.0",
-  "description": "天之川沙夜 · 桌面陪伴（VPet 帧动画全身桌宠）",
-  "type": "module",
+  "version": "1.0.0",
+  "description": "天之川沙夜 · 桌面伴侣（VPet 帧动画全身 + 记忆 / 可对话）",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electron ."
+    "dev": "electron .",
+    "test": "node scripts/test-engine.mjs && node scripts/test-stream-presence.mjs"
   },
   "dependencies": {
     "electron": "^43.1.0"

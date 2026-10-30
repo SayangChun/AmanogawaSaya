@@ -7,6 +7,11 @@ import {
   isZonePosesEnabled,
 } from "./character/screen-zone.js";
 import { loadState, saveState, gainAffinity, setUserName } from "./state.js";
+import { createChatPanel, createTypewriter } from "./ui/chat-panel.js";
+import { createLocalEngine } from "./engine/local-engine.js";
+import { createStreamPresence } from "./character/stream-presence.js";
+import { improvFidget } from "./character/motion-improv.js";
+import { createMoodEngine } from "./character/mood.js";
 
 const app = document.querySelector("#app");
 
@@ -56,6 +61,26 @@ let mouseIgnoreRaf = 0;
 let bubbleOpen = false;
 /** @type {ReturnType<typeof setTimeout> | null} */
 let bubbleHideTimer = null;
+/** 伴侣聊天面板打开（chat 窗口模式：输入行在脚下，feet 上移） */
+let chatOpen = false;
+/** chat 模式里脚底到窗口底部的距离（给输入行留位） */
+const CHAT_FEET_PAD = 64;
+/** 本地记忆快照（主进程 memory-store 的缓存镜像） */
+/** @type {{ events: any[], facts: any[], followUps: any[], mood: any, meta: any } | null} */
+let memory = null;
+/** 本地对话引擎（离线，纯规则 + 记忆注入） */
+const localEngine = createLocalEngine();
+/** 主动性状态：久别只提醒一次 / 时段切换 / 冷却 */
+let absenceNotified = false;
+let lastBucket = null;
+let lastProactiveAt = 0;
+const PROACTIVE_TICK_MS = 45_000;
+const PROACTIVE_COOLDOWN_MS = 8 * 60_000;
+/** chat 面板（输入/历史）+ 气泡打字机 */
+let chatPanel = null;
+let typewriter = null;
+/** 久别重逢判定阈值（ms） */
+const MISS_YOU_MS = 6 * 60 * 60 * 1000;
 /**
  * Active pointer session on the pet.
  * @type {null | {
@@ -75,6 +100,40 @@ let pointerArmed = false;
 let suppressClickUntil = 0;
 /** @type {null | (() => void)} */
 let pendingAfterDrag = null;
+
+/** —— 直播感：指针在她身上的状态（hover / 注视） —— */
+/** 指针当前是否位于 pet 身体矩形内 */
+let hoverOnPet = false;
+/** 指针开始静止的时刻（ms；移动会重置） */
+let hoverStillSince = 0;
+/** 指针上一帧坐标（静止判定） */
+let hoverLastX = 0;
+let hoverLastY = 0;
+/** 本轮 hover 是否已触发过轻反应（离开后重置） */
+let hoverNotified = false;
+/** 连戳计数（时间戳窗口） */
+let pokeTimes = [];
+/** 直播感引擎 */
+let streamPresence = null;
+
+/**
+ * 情绪引擎：五维情绪持续演化，直接决定动作合成权重。
+ * 事件脉冲即时生效，空闲时向时段/亲密度基线回归 + 随机游走。
+ */
+const moodEngine = createMoodEngine({
+  getState: () => state,
+  timeBucket,
+});
+
+/** 事件脉冲入口：先推进时间（回归+游走），再叠加事件 */
+function pulseMood(event, opts) {
+  try {
+    moodEngine.tick();
+    moodEngine.pulse(event, opts);
+  } catch {
+    /* 情绪波动失败不影响互动 */
+  }
+}
 
 /** Cached DOM nodes (refreshed on paint). */
 const dom = {
@@ -98,6 +157,13 @@ const dom = {
   nameInput: /** @type {HTMLInputElement|null} */ (null),
   nameStatus: /** @type {HTMLElement|null} */ (null),
   nameSave: /** @type {HTMLElement|null} */ (null),
+  chatPanel: /** @type {HTMLElement|null} */ (null),
+  chatInput: /** @type {HTMLInputElement|null} */ (null),
+  chatScroll: /** @type {HTMLElement|null} */ (null),
+  chatDockToggle: /** @type {HTMLElement|null} */ (null),
+  factsList: /** @type {HTMLElement|null} */ (null),
+  factsEmpty: /** @type {HTMLElement|null} */ (null),
+  factsCount: /** @type {HTMLElement|null} */ (null),
 };
 
 function cacheDom() {
@@ -121,6 +187,13 @@ function cacheDom() {
   dom.nameInput = document.querySelector("#user-name-input");
   dom.nameStatus = document.querySelector("#name-status");
   dom.nameSave = document.querySelector("#name-save");
+  dom.chatPanel = document.querySelector("#chat-panel");
+  dom.chatInput = document.querySelector("#chat-input");
+  dom.chatScroll = document.querySelector("#chat-scroll");
+  dom.chatDockToggle = document.querySelector("#dock-chat-toggle");
+  dom.factsList = document.querySelector("#facts-list");
+  dom.factsEmpty = document.querySelector("#facts-empty");
+  dom.factsCount = document.querySelector("#facts-count");
 }
 
 const zoneTracker = createZoneTracker({
@@ -132,6 +205,8 @@ const zoneTracker = createZoneTracker({
 const motion = createMotionController({
   getZoneSnapshot: (opts) => zoneTracker.getSnapshot(opts),
   getLastZoneId: () => zoneTracker.getZoneId(),
+  // 情绪快照：动作合成的核心权重来源
+  getMood: () => moodEngine.snapshot(),
   onZoneSit: (_zoneId) => {
     if (bubbleOpen || Math.random() >= 0.15) return;
     const line = speakState("zoneSit");
@@ -139,6 +214,12 @@ const motion = createMotionController({
     openBubble(3500);
     updateBubbleDom();
   },
+  // 闲置微动作走即兴合成（带情绪语境，每次链都现场生成）
+  improvFidget: (ctx) =>
+    improvFidget({
+      ...ctx,
+      mood: moodEngine.snapshot(),
+    }),
 });
 
 const wander = createWanderController({
@@ -155,6 +236,61 @@ const wander = createWanderController({
       openBubble(4500);
     }
   },
+});
+
+/**
+ * 直播感显示出口：气泡逐字 + 即兴动作链（不打断漫游锁）。
+ * 与 proactiveSay 分工：这里只负责「碎碎念层」，轻且密。
+ */
+function showStreamLine(text, opts = {}) {
+  if (!text) return;
+  if (chatOpen || dockOpen || isDragging || pointerArmed) return;
+  currentScene = opts.scene || "chatter";
+  currentLine = text;
+  openBubble(opts.bubbleMs || 7000);
+  updateBubbleDom({ typing: true });
+  typewriter?.start(text);
+  if (Array.isArray(opts.chain) && opts.chain.length) {
+    // 非 force：漫游 / 场景锁活跃时动作自动让位，话照说
+    motion.playChain(opts.chain, { fromIdle: true, force: false });
+  } else {
+    motion.playBehavior("ponder", { force: true });
+  }
+  persist();
+}
+
+/** 指针是否在 pet 身体矩形内 */
+function pointerInPetRect(x, y) {
+  const pet = dom.petHit || document.querySelector("#pet-hit");
+  if (!pet || typeof x !== "number" || typeof y !== "number") return false;
+  const r = pet.getBoundingClientRect();
+  return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+}
+
+streamPresence = createStreamPresence({
+  getState: () => ({ affinity: state.affinity, userName: state.userName }),
+  getFacts: () => (memory?.facts || []).filter((f) => f && f.confirmed !== false),
+  isBusy: () =>
+    Boolean(
+      isDragging ||
+        pointerArmed ||
+        dockOpen ||
+        chatOpen ||
+        bubbleOpen ||
+        typewriter?.isActive?.(),
+    ),
+  speakScene: (scene, vars) => speakState(scene, { vars }).text,
+  showLine: (text, opts) => showStreamLine(text, opts),
+  timeBucket,
+  getZoneId: () => zoneTracker.getZoneId(),
+  getMood: () => moodEngine.snapshot(),
+  pulseMood: (event, opts) => pulseMood(event, opts),
+  pointerOnPet: () => ({
+    onPet: hoverOnPet && !isDragging && !pointerArmed,
+    stillMs: hoverStillSince ? Date.now() - hoverStillSince : 0,
+  }),
+  idleSeconds: () => window.petApi?.idleSeconds?.() ?? Promise.resolve(null),
+  appendEvent: (ev) => void memAppendEvent(ev),
 });
 
 /**
@@ -263,6 +399,7 @@ function isInteractiveTarget(el) {
   if (el.closest("#pet-hit")) return true;
   if (el.closest("#pet-dock") && !el.closest("#pet-dock.closed")) return true;
   if (bubbleOpen && el.closest("#bubble") && !el.closest("#bubble.closed")) return true;
+  if (chatOpen && el.closest("#chat-panel")) return true;
   return false;
 }
 
@@ -278,7 +415,7 @@ function refreshMouseIgnore(clientX, clientY) {
     clientY = lastPointerClientY;
   }
 
-  if (isDragging || pointerArmed || dockOpen || Date.now() < stickyHitUntil) {
+  if (isDragging || pointerArmed || dockOpen || chatOpen || Date.now() < stickyHitUntil) {
     applyMouseIgnore(false);
     return;
   }
@@ -414,13 +551,14 @@ function setAppCssMode(cssMode) {
  */
 async function syncWindowChrome(feetOpts = {}) {
   if (isDragging || pointerArmed) return;
-  /** @type {"compact" | "speak" | "dock" | "dockStats"} */
+  /** @type {"compact" | "speak" | "dock" | "dockStats" | "chat"} */
   let next = "compact";
-  if (dockOpen && dockStatsOpen) next = "dockStats";
+  if (chatOpen) next = "chat";
+  else if (dockOpen && dockStatsOpen) next = "dockStats";
   else if (dockOpen) next = "dock";
   else if (bubbleOpen) next = "speak";
 
-  const cssMode = dockOpen ? "dock" : "compact";
+  const cssMode = chatOpen ? "chat" : dockOpen ? "dock" : "compact";
   setAppCssMode(cssMode);
   applyDockPlacementClass();
 
@@ -453,6 +591,75 @@ function persist() {
   state.lastLine = currentLine;
   state.lastScene = currentScene;
   saveState(state);
+  // 记忆层镜像亲密度（主进程 mood.json）
+  void window.petApi?.memory?.updateMood?.({ affinity: state.affinity });
+}
+
+/**
+ * 从主进程加载记忆；旧版 localStorage 状态一次性迁移；
+ * 记忆里的亲密度高于本地 state 时（换机/清过缓存）记忆优先。
+ */
+async function loadMemory() {
+  try {
+    const res = await window.petApi?.memory?.getState?.();
+    if (!res?.ok || !res.snapshot) return;
+    memory = {
+      events: res.snapshot.events || [],
+      facts: res.snapshot.facts || [],
+      followUps: res.snapshot.followUps || [],
+      mood: res.snapshot.mood || {},
+      meta: res.snapshot.meta || {},
+    };
+    // 旧版迁移（只跑一次，主进程有 guarded）
+    let legacy = null;
+    try {
+      legacy = JSON.parse(localStorage.getItem("amanogawa.saya.pet.v3") || "null");
+    } catch {
+      legacy = null;
+    }
+    if (!memory.meta.legacyImported && legacy) {
+      try {
+        const m = await window.petApi?.memory?.migrateLegacy?.({
+          affinity: legacy.affinity,
+          userName: legacy.userName,
+          totalInteractions: legacy.totalInteractions,
+        });
+        if (m?.ok && m.result?.ok) memory.meta.legacyImported = true;
+      } catch {
+        /* migration is best-effort */
+      }
+    }
+    // 记忆亲密度优先（她确实记得你，只是本地缓存丢了）
+    const memAffinity = Number(memory.mood?.affinity);
+    if (Number.isFinite(memAffinity) && memAffinity > state.affinity) {
+      state.affinity = memAffinity;
+    }
+  } catch {
+    /* memory unavailable — chat degrades to stateless */
+  }
+}
+
+/**
+ * 启动问候优先级：到期约定 > 久别重逢 > 常规时段问候。
+ * @returns {{ scene: string, line: { text: string } }}
+ */
+function bootGreeting() {
+  const now = Date.now();
+  const due = (memory?.followUps || []).filter((f) => f && !f.done && Number(f.dueAt) <= now);
+  if (due.length) {
+    const first = due[0];
+    void window.petApi?.memory?.completeFollowUp?.(first.id);
+    return { scene: "followUp", line: speakState("followUp", { vars: { plan: first.text } }) };
+  }
+  const last = Number(memory?.mood?.lastInteractionAt) || 0;
+  if (last && now - last > MISS_YOU_MS) {
+    return { scene: "missYou", line: speakState("missYou") };
+  }
+  const greetingScene = timeBucket();
+  return {
+    scene: greetingScene,
+    line: speakState(Math.random() < 0.5 ? "boot" : greetingScene),
+  };
 }
 
 /**
@@ -488,8 +695,17 @@ function openBubble(ms = 8000) {
   }, ms);
 }
 
-function updateBubbleDom() {
-  if (dom.lineText) dom.lineText.innerHTML = escapeHtml(currentLine);
+function updateBubbleDom(opts = {}) {
+  if (dom.lineText) {
+    if (opts.typing) {
+      // 打字机模式下先留空，由 createTypewriter 逐字填充
+      dom.lineText.textContent = "";
+      dom.lineText.classList.add("is-typing");
+    } else {
+      dom.lineText.innerHTML = escapeHtml(currentLine);
+      dom.lineText.classList.remove("is-typing");
+    }
+  }
   if (dom.bubbleRank) dom.bubbleRank.textContent = getAffinityRank(state.affinity).title;
   if (dom.bubble) dom.bubble.classList.toggle("closed", !bubbleOpen);
   syncWindowChrome();
@@ -523,6 +739,9 @@ function say(scene, { affinityGain = 0 } = {}) {
   const line = speakState(scene);
   currentScene = scene;
   currentLine = line.text;
+
+  // 互动事件 → 情绪脉冲（动作合成的权重随心情变化）
+  pulseMood(scene);
 
   if (affinityGain > 0) {
     const { before, gained } = applyAffinityGain(affinityGain);
@@ -575,8 +794,316 @@ function updateNameDom() {
   }
 }
 
-function spawnParticles(x, y, symbol = "✨") {
-  const stage = dom.stage || document.querySelector("#stage");
+/** dock「聊天」按钮状态 */
+function updateChatBtnDom() {
+  const btn = dom.chatDockToggle || document.querySelector("#dock-chat-toggle");
+  if (!btn) return;
+  btn.classList.toggle("is-on", chatOpen);
+  btn.setAttribute("aria-pressed", chatOpen ? "true" : "false");
+  btn.title = chatOpen ? "收起聊天" : "打开聊天：打字和她说说话";
+  const lbl = btn.querySelector(".lbl");
+  if (lbl) lbl.textContent = chatOpen ? "收起" : "聊天";
+}
+
+/** 星轨面板：她记得的事实列表（可逐条遗忘） */
+function updateFactsDom() {
+  const list = dom.factsList || document.querySelector("#facts-list");
+  const empty = dom.factsEmpty || document.querySelector("#facts-empty");
+  const count = dom.factsCount || document.querySelector("#facts-count");
+  const facts = Array.isArray(memory?.facts) ? memory.facts : [];
+  if (count) count.textContent = `${facts.length} 条`;
+  if (!list) return;
+  list.textContent = "";
+  if (empty) empty.style.display = facts.length ? "none" : "";
+  const recent = facts.slice(0, 6);
+  for (const fact of recent) {
+    const row = document.createElement("div");
+    row.className = "fact-item";
+    const text = document.createElement("span");
+    text.className = "fact-text";
+    text.textContent = fact.text;
+    const forget = document.createElement("button");
+    forget.type = "button";
+    forget.className = "fact-forget";
+    forget.textContent = "✕";
+    forget.title = "让她忘记这条";
+    forget.setAttribute("data-fact-id", fact.id);
+    forget.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const res = await window.petApi?.memory?.removeFact?.(fact.id);
+      if (res?.ok) {
+        memory.facts = memory.facts.filter((f) => f.id !== fact.id);
+        updateFactsDom();
+        spawnParticles(70, 120, "·");
+      }
+    });
+    row.append(text, forget);
+    list.appendChild(row);
+  }
+}
+
+/** 本地记忆镜像的便捷写入（成功后同步缓存，引擎上下文即时保鲜） */
+async function memAppendEvent(ev) {
+  const res = await window.petApi?.memory?.appendEvent?.(ev);
+  if (res?.ok && res.event && memory) {
+    memory.events.push(res.event);
+    if (memory.events.length > 200) memory.events = memory.events.slice(-200);
+  }
+}
+
+async function memAddFact(text, opts) {
+  const res = await window.petApi?.memory?.addFact?.(text, opts);
+  if (res?.ok && res.fact && memory) memory.facts.push(res.fact);
+  return res?.fact || null;
+}
+
+async function memAddFollowUp(input) {
+  const res = await window.petApi?.memory?.addFollowUp?.(input);
+  if (res?.ok && res.followUp && memory) memory.followUps.push(res.followUp);
+  return res?.followUp || null;
+}
+
+/** 打开/收起聊天面板（含窗口模式切换与脚底锚点保持） */
+async function toggleChat(show) {
+  const willOpen = Boolean(show);
+  if (willOpen === chatOpen) return;
+
+  if (willOpen) {
+    // dock 与 chat 不并存：先收起 dock（其内部会measure/correct）
+    if (dockOpen) await toggleDock(false);
+    const feetY = await measurePetFeetScreenY();
+    const bodyX = await measurePetBodyScreenCenterX();
+    const prevFeet = measureFeetFromBottomClient();
+    chatOpen = true;
+    updateChatBtnDom();
+    await syncWindowChrome({
+      prevFeetFromBottom: prevFeet ?? undefined,
+      feetFromBottom: CHAT_FEET_PAD,
+    });
+    // 键盘输入需要窗口焦点
+    window.petApi?.focus?.();
+    chatPanel?.focus();
+    chatPanel?.renderScrollback(recentChatRows());
+    await correctPetFeetScreenY(feetY);
+    await correctPetBodyScreenX(bodyX);
+    applyMouseIgnore(false);
+    wander.pause();
+    // 她专注听：碎碎念暂停
+    streamPresence?.noteChatOpen();
+    return;
+  }
+
+  // 收起：先measure再缩窗，最后修正，保持她不动
+  const feetY = await measurePetFeetScreenY();
+  const bodyX = await measurePetBodyScreenCenterX();
+  const prevFeet = measureFeetFromBottomClient();
+  chatOpen = false;
+  typewriter?.stop();
+  updateChatBtnDom();
+  await syncWindowChrome({
+    prevFeetFromBottom: prevFeet ?? undefined,
+    feetFromBottom: CHAT_FEET_PAD,
+  });
+  await correctPetFeetScreenY(feetY);
+  await correctPetBodyScreenX(bodyX);
+  chatPanel?.blur();
+  refreshMouseIgnore(lastPointerClientX, lastPointerClientY);
+  wander.resume();
+  // 聊天收起：碎碎念恢复
+  streamPresence?.noteChatClosed();
+}
+
+/** 最近对话（记忆事件流尾部，供回显） */
+function recentChatRows(limit = 12) {
+  const events = Array.isArray(memory?.events) ? memory.events : [];
+  return events.slice(-limit).map((e) => ({ role: e.role, text: e.text }));
+}
+
+/** 本地引擎回复（离线，规则匹配 + 记忆注入） */
+function generateLocalReply(text) {
+  const ctx = {
+    userName: state.userName,
+    affinity: state.affinity,
+    timeBucket: timeBucket(),
+    facts: (memory?.facts || []).filter((f) => f && f.confirmed),
+    now: Date.now(),
+  };
+  let reply;
+  try {
+    reply = localEngine.generateReply(text, ctx);
+  } catch {
+    reply = null;
+  }
+  return (
+    reply || {
+      text: "……风声盖住了。……再说一次好吗？",
+      scene: "chatTalk",
+      expression: "ponder",
+      affinityDelta: 0,
+    }
+  );
+}
+
+/** 应用引擎回复：亲密度 / 名字 / 气泡 / 表情 / 记忆写入 */
+function applyReply(reply) {
+  if (reply.affinityDelta > 0) {
+    const { before, gained } = applyAffinityGain(reply.affinityDelta);
+    maybeAppendAffinityMilestone(before, gained);
+    updateAffinityDom();
+  }
+  if (reply.updateUserName) {
+    state = setUserName(state, reply.updateUserName);
+    updateNameDom();
+  }
+
+  currentScene = reply.scene || "chatTalk";
+  currentLine = reply.text;
+  openBubble(14000);
+  typewriter?.start(reply.text);
+  updateBubbleDom({ typing: true });
+  motion.playBehavior(reply.expression || "ponder", { force: true });
+  persist();
+  void memAppendEvent({
+    role: "saya",
+    text: reply.text,
+    scene: reply.scene,
+    action: reply.expression,
+    affinityDelta: reply.affinityDelta || undefined,
+  });
+}
+
+/**
+ * 聊天主流程：用户输入 → 本地引擎（意图分类 + 记忆注入）→ 亲密度/事实/约定 →
+ * 逐字回复 → 表情。全离线，不发任何网络请求。
+ */
+function sendChatText(raw) {
+  const text = String(raw || "").trim();
+  if (!text || !chatOpen) return;
+
+  chatPanel?.appendRow("user", text);
+  void memAppendEvent({ role: "user", text });
+  absenceNotified = false;
+
+  applyReply(generateLocalReply(text));
+}
+
+/** 「记住这句」：把输入框原文显式存为事实 */
+async function rememberChatText(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return;
+  const fact = await memAddFact(text.slice(0, 120), { source: "manual", confirmed: true });
+  if (!fact) return;
+  updateFactsDom();
+  currentScene = "factSaved";
+  currentLine = speakState("factSaved").text;
+  openBubble(5000);
+  updateBubbleDom();
+  motion.playBehavior("nod", { force: true });
+  spawnParticles(70, 90, "💫");
+}
+
+/** 她主动开口前的基础条件：冷却期外、不在拖拽中 */
+function canProactiveSpeak() {
+  return (
+    Date.now() - lastProactiveAt >= PROACTIVE_COOLDOWN_MS &&
+    !isDragging &&
+    !pointerArmed
+  );
+}
+
+/** 她主动开口：聊天开着就直接接话，平时用气泡逐字说 */
+function proactiveSay(text, { scene = "chatTalk", bubbleMs = 9000 } = {}) {
+  if (!text) return;
+  lastProactiveAt = Date.now();
+  currentScene = scene;
+  currentLine = text;
+  void memAppendEvent({ role: "saya", text, scene, action: "ponder" });
+  if (chatOpen) {
+    chatPanel?.appendRow("saya", text);
+    return;
+  }
+  if (dockOpen) {
+    // 快捷栏开着窗口太窄，30 秒后重试
+    lastProactiveAt = Date.now() - PROACTIVE_COOLDOWN_MS + 30_000;
+    return;
+  }
+  openBubble(bubbleMs);
+  updateBubbleDom({ typing: true });
+  typewriter?.start(text);
+  motion.playBehavior("ponder", { force: true });
+  persist();
+}
+
+/** 主动性队列：到期约定 > 久别重逢 > 时段切换 > 随机想起他说过的事 */
+function proactivityTick() {
+  const now = Date.now();
+  // 1) 到期约定：她替你记着，到点轻轻提一句
+  const due = (memory?.followUps || []).filter(
+    (f) => f && !f.done && Number(f.dueAt) <= now,
+  );
+  if (due.length && canProactiveSpeak()) {
+    const first = due[0];
+    void window.petApi?.memory?.completeFollowUp?.(first.id);
+    if (memory) {
+      const item = memory.followUps.find((f) => f.id === first.id);
+      if (item) item.done = true;
+    }
+    proactiveSay(speakState("followUp", { vars: { plan: first.text } }).text, {
+      scene: "followUp",
+    });
+    return;
+  }
+  // 2) 久别重逢（运行期间 >6h 没跟她说话；每次久别只说一次）
+  const last = Number(memory?.mood?.lastInteractionAt) || 0;
+  if (last && !absenceNotified && now - last > MISS_YOU_MS && canProactiveSpeak()) {
+    absenceNotified = true;
+    proactiveSay(speakState("missYou").text, { scene: "missYou" });
+    return;
+  }
+  // 3) 时段切换：入夜了、天亮了，她会说一声
+  const bucket = timeBucket();
+  if (bucket !== lastBucket) {
+    if (canProactiveSpeak()) {
+      lastBucket = bucket;
+      proactiveSay(speakState(bucket).text, { scene: bucket, bubbleMs: 7000 });
+      return;
+    }
+  } else {
+    lastBucket = bucket;
+  }
+  // 4) 随机想起你说过的事（低频，冷却期内不会连发）
+  const facts = (memory?.facts || []).filter((f) => f && f.confirmed !== false);
+  if (facts.length && Math.random() < 0.07 && canProactiveSpeak()) {
+    const fact = facts[Math.floor(Math.random() * facts.length)];
+    proactiveSay(speakState("recall", { vars: { fact: fact.text } }).text, {
+      scene: "recall",
+    });
+  }
+  // 5) 深夜还在 → 每晚一次的夜猫子关怀
+  maybeNightOwl();
+}
+
+/**
+ * 夜猫子关怀：22:00 之后用户还活跃（近两分钟内有输入），
+ * 每个自然晚只提醒一次。
+ */
+function maybeNightOwl() {
+  const bucket = timeBucket();
+  if (bucket !== "night" && bucket !== "lateNight") return;
+  const idle = streamPresence?.lastIdleSec?.() ?? null;
+  if (idle == null || idle > 120) return; // 不在电脑前就不打扰
+  const today = new Date().toDateString();
+  try {
+    if (localStorage.getItem("saya.nightOwlDate") === today) return;
+    localStorage.setItem("saya.nightOwlDate", today);
+  } catch {
+    return; // localStorage 不可用就放弃（避免每晚轰炸）
+  }
+  if (bubbleOpen || chatOpen || dockOpen) return;
+  proactiveSay(speakState("nightOwl").text, { scene: "nightOwl" });
+}
+
+function spawnParticles(x, y, symbol = "✨") {  const stage = dom.stage || document.querySelector("#stage");
   if (!stage) return;
   for (let i = 0; i < 5; i++) {
     const p = document.createElement("span");
@@ -602,6 +1129,9 @@ async function toggleDock(show, pointer = {}) {
   const dock = dom.dock || document.querySelector("#pet-dock");
   if (!dock) return;
   const willOpen = Boolean(show);
+
+  // chat 与 dock 不并存：开 dock 前先收起 chat
+  if (willOpen && chatOpen) await toggleChat(false);
 
   if (!willOpen) {
     const feetY = await measurePetFeetScreenY();
@@ -845,6 +1375,10 @@ async function handleDockAction(action) {
       }
       updateDockWanderText();
       break;
+    case "chat":
+    case "chat-close":
+      await toggleChat(!chatOpen);
+      break;
     case "hide":
       say("hide", { affinityGain: 0 });
       setTimeout(() => window.petApi?.hide?.(), 400);
@@ -894,6 +1428,25 @@ function shellHtml() {
               </div>
             </div>
           </button>
+        </div>
+      </div>
+
+      <div class="chat" id="chat-panel" aria-label="和沙夜聊天">
+        <div class="chat-scroll" id="chat-scroll" aria-live="polite"></div>
+        <div class="chat-row">
+          <input
+            type="text"
+            id="chat-input"
+            class="chat-input"
+            maxlength="200"
+            placeholder="想跟沙夜说点什么…"
+            autocomplete="off"
+            spellcheck="false"
+            aria-label="输入想对沙夜说的话"
+          />
+          <button class="chat-btn" id="chat-remember" type="button" title="让沙夜记住这句话">记</button>
+          <button class="chat-btn" id="chat-send" type="button" title="说给她听">说</button>
+          <button class="chat-btn is-close" id="chat-close" type="button" title="收起聊天">✕</button>
         </div>
       </div>
 
@@ -955,6 +1508,15 @@ function shellHtml() {
             </div>
             <p class="name-hint">告诉沙夜名字后，她偶尔会在对话里呼唤你。</p>
           </div>
+          <div class="facts-card" aria-label="沙夜记住的事">
+            <div class="name-head">
+              <span class="label">她记得的事</span>
+              <span class="name-status" id="facts-count">0 条</span>
+            </div>
+            <div class="facts-list" id="facts-list"></div>
+            <p class="facts-empty" id="facts-empty">还没有。聊天时说给她听，她就记住了。</p>
+          </div>
+
         </div>
 
         <div class="dock-actions" role="group" aria-label="快捷操作">
@@ -973,6 +1535,17 @@ function shellHtml() {
           <button class="dock-btn" data-dock-action="rest" type="button" title="休息：随机坐下或换姿势">
             <span class="ico" aria-hidden="true">🌙</span>
             <span class="lbl">休息</span>
+          </button>
+          <button
+            class="dock-btn${chatOpen ? " is-on" : ""}"
+            data-dock-action="chat"
+            id="dock-chat-toggle"
+            type="button"
+            aria-pressed="${chatOpen ? "true" : "false"}"
+            title="${chatOpen ? "收起聊天" : "打开聊天：打字和她说说话"}"
+          >
+            <span class="ico" aria-hidden="true">💭</span>
+            <span class="lbl">聊天</span>
           </button>
           <button
             class="dock-btn${wanderOn ? " is-on" : ""}"
@@ -1036,11 +1609,20 @@ function bind() {
   const pet = dom.petHit;
   const bubble = dom.bubble;
   const dock = dom.dock;
+  chatPanel?.bind();
+  typewriter = createTypewriter(() => dom.lineText, {
+    onDone: () => chatPanel?.appendRow("saya", currentLine),
+  });
 
   if (bubble) {
     bubble.addEventListener("click", (e) => {
       if (!bubbleOpen) return;
       e.stopPropagation();
+      // 回复逐字输出中：点击=立即显示全文，不当成新对话
+      if (typewriter?.isActive()) {
+        typewriter.skip();
+        return;
+      }
       say(Math.random() < 0.5 ? timeBucket() : "talk", { affinityGain: 1 });
     });
   }
@@ -1054,7 +1636,7 @@ function bind() {
       e.stopPropagation();
       const act = btn.getAttribute("data-dock-action");
       await handleDockAction(act);
-      if (act !== "stats" && act !== "stats-close") {
+      if (act !== "stats" && act !== "stats-close" && act !== "chat" && act !== "chat-close") {
         await toggleDock(false, { clientX: e.clientX, clientY: e.clientY });
       }
     });
@@ -1088,6 +1670,8 @@ function bind() {
       drag = null;
       isDragging = false;
       pointerArmed = false;
+      // 拖拽惯性回正
+      motion.setDragLean(0);
       pet.classList.remove("is-dragging");
       setDraggingLock(false);
 
@@ -1099,6 +1683,10 @@ function bind() {
 
       if (dragged) {
         suppressClickUntil = Date.now() + CLICK_SUPPRESS_MS;
+        // 直播感：被拎着跑了很远 → 晕乎乎反应
+        if (session && Number(session.pathLen) > 0) {
+          streamPresence?.noteDragEnd(Number(session.pathLen));
+        }
         const deferred = pendingAfterDrag;
         pendingAfterDrag = null;
         if (deferred) {
@@ -1148,6 +1736,7 @@ function bind() {
         startX: event.screenX,
         startY: event.screenY,
         moved: false,
+        pathLen: 0,
       };
       try {
         pet.setPointerCapture(event.pointerId);
@@ -1184,6 +1773,9 @@ function bind() {
       drag.lastY = event.screenY;
       if (dx === 0 && dy === 0) return;
 
+      drag.pathLen = (drag.pathLen || 0) + Math.abs(dx) + Math.abs(dy);
+      // 拖拽惯性：瞬时速度 → 身体倾斜（Flow 层平滑趋近，松手回正）
+      motion.setDragLean(Math.max(-1, Math.min(1, dx * 0.35)));
       window.petApi?.moveBy?.({ dx, dy });
     });
 
@@ -1197,6 +1789,16 @@ function bind() {
       });
       if (dragged) return;
       if (Date.now() < suppressClickUntil) return;
+
+      // 直播感：短窗口内被连戳 ≥3 次 → 她有意见了
+      const pokedAt = Date.now();
+      pokeTimes = pokeTimes.filter((t) => pokedAt - t < 2500);
+      pokeTimes.push(pokedAt);
+      if (pokeTimes.length >= 3) {
+        const count = pokeTimes.length;
+        pokeTimes = [];
+        streamPresence?.notePokeRapid(count);
+      }
 
       const scene = Math.random() < 0.55 ? timeBucket() : "tap";
       say(scene, { affinityGain: 1 });
@@ -1253,15 +1855,72 @@ document.addEventListener(
   (e) => {
     if (isDragging || pointerArmed) {
       notePointerClient(e.clientX, e.clientY);
+      // 视线跟随：她在窗口内始终微微朝光标方向偏移（拖拽倾斜由 pet 局部分支管）
+      motion.setFlowPointer(pointerFlowNorm(e.clientX));
       return;
     }
+    trackHover(e.clientX, e.clientY);
+    motion.setFlowPointer(pointerFlowNorm(e.clientX));
     scheduleRefreshMouseIgnore(e.clientX, e.clientY);
   },
   { passive: true, capture: true },
 );
 
+/**
+ * 指针相对她身体中心的归一化方向（-1..1），供 Flow 层视线跟随。
+ * @param {number} x
+ * @returns {number | null} 窗口过窄测不出时返回 null
+ */
+function pointerFlowNorm(x) {
+  const pet = dom.petHit || document.querySelector("#pet-hit");
+  if (!pet || typeof x !== "number") return null;
+  const r = pet.getBoundingClientRect();
+  const cx = r.left + r.width / 2;
+  const span = Math.max(60, r.width * 0.75);
+  const nx = (x - cx) / span;
+  return Number.isFinite(nx) ? Math.max(-1, Math.min(1, nx)) : null;
+}
+
+/**
+ * 直播感 hover 跟踪：进入身体 → 轻反应；停在身上不动 → 注视。
+ * @param {number} x
+ * @param {number} y
+ */
+function trackHover(x, y) {
+  const onPet = pointerInPetRect(x, y);
+  if (onPet !== hoverOnPet) {
+    hoverOnPet = onPet;
+    hoverLastX = x;
+    hoverLastY = y;
+    if (onPet) {
+      hoverStillSince = Date.now();
+      if (!hoverNotified) {
+        hoverNotified = true;
+        streamPresence?.noteHoverEnter();
+      }
+    } else {
+      hoverStillSince = 0;
+      hoverNotified = false;
+    }
+    return;
+  }
+  if (hoverOnPet) {
+    const moved = Math.hypot(x - hoverLastX, y - hoverLastY);
+    if (moved > 8) {
+      hoverStillSince = Date.now();
+      hoverLastX = x;
+      hoverLastY = y;
+    }
+  }
+}
+
 document.addEventListener("pointerleave", () => {
-  if (isDragging || pointerArmed || dockOpen) return;
+  hoverOnPet = false;
+  hoverStillSince = 0;
+  hoverNotified = false;
+  // 光标离开窗口：她的视线缓缓收回（Flow 层平滑归零）
+  motion.setFlowPointer(null);
+  if (isDragging || pointerArmed || dockOpen || chatOpen) return;
   lastPointerClientX = null;
   lastPointerClientY = null;
   if (Date.now() < stickyHitUntil) return;
@@ -1277,24 +1936,34 @@ document.addEventListener("click", (e) => {
 function paint() {
   motion.detach();
   if (!dockOpen) state.mode = "compact";
-  setAppCssMode(dockOpen ? "dock" : "compact");
+  setAppCssMode(chatOpen ? "chat" : dockOpen ? "dock" : "compact");
   app.innerHTML = shellHtml();
   bind();
   updateDockWanderText();
   updateDockStatsPanel();
   updateAffinityDom();
   updateNameDom();
+  updateChatBtnDom();
+  updateFactsDom();
 }
 
-function boot() {
+async function boot() {
   state.mode = "compact";
   bubbleOpen = false;
   app.classList.add("mode-compact");
 
-  const greetingScene = timeBucket();
-  const line = speakState(Math.random() < 0.5 ? "boot" : greetingScene);
-  currentScene = line.scene;
-  currentLine = line.text;
+  chatPanel = createChatPanel({
+    onSend: (text) => sendChatText(text),
+    onRemember: (text) => rememberChatText(text),
+    onClose: () => toggleChat(false),
+  });
+
+  // 记忆先行：问候语可能依赖约定到期 / 久别重逢
+  await loadMemory();
+
+  const greeting = bootGreeting();
+  currentScene = greeting.scene;
+  currentLine = greeting.line.text;
   openBubble(10000);
   persist();
   zoneTracker.start();
@@ -1330,10 +1999,32 @@ function boot() {
     }
     collapseToCompact();
   });
+
+  // 主动性队列（她先开口）
+  lastBucket = timeBucket();
+  absenceNotified = greeting.scene === "missYou" || greeting.scene === "followUp";
+  setInterval(proactivityTick, PROACTIVE_TICK_MS);
+
+  // 直播感引擎：碎碎念 / 注视 / 去留观察（启动后先安静一会儿）
+  window.petApi?.onSystemEvent?.((type) => streamPresence?.noteSystemEvent(type));
+  streamPresence?.start();
+
+  // 情绪空闲漂移：没有互动时她的心情也在慢慢变化
+  setInterval(() => {
+    try {
+      moodEngine.tick();
+    } catch {
+      /* 忽略 */
+    }
+  }, 30_000);
 }
 
 window.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+  if (chatOpen) {
+    toggleChat(false);
+    return;
+  }
   if (dockStatsOpen) {
     toggleDockStats(false);
     return;
@@ -1350,4 +2041,5 @@ window.addEventListener("keydown", (event) => {
   window.petApi?.hide?.();
 });
 
-boot();
+// boot 是异步的（先加载记忆）；顶层 await 会阻塞模块执行，这里显式 void
+void boot();

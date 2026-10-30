@@ -9,6 +9,7 @@
  */
 
 import { CHARACTER } from "./profile.js";
+import { timeBucket } from "./dialogue.js";
 import { ANIM_MANIFEST } from "./anim-manifest.js";
 import {
   ZONE_CONFIG,
@@ -23,6 +24,11 @@ import {
   estimateChainMs,
   primaryActionForBehavior,
 } from "./behaviors.js";
+import {
+  improvFidget as defaultImprovFidget,
+  improvChain,
+  SCENE_BIAS,
+} from "./motion-improv.js";
 
 /** @typedef {string} ActionId */
 
@@ -66,8 +72,8 @@ export const ACTIONS = (() => {
   return map;
 })();
 
-/** 闲置时随机切换的小动作（单动作；偶发 idleFidget 链见 tickIdle） */
-const IDLE_POOL = [
+/** 闲置微动作（高频小动作：VPet 式「停不下来」的主体） */
+const IDLE_MICRO_POOL = [
   "sway",
   "look",
   "smile",
@@ -75,20 +81,26 @@ const IDLE_POOL = [
   "calm",
   "soft",
   "breathe",
-  "wave",
-  "stretch",
-  "sit",
-  "crouch",
-  "lie",
-  "prone",
   "peek",
   "think",
   "giggle",
-  "yawn",
 ];
 
-/** 偶发「微序列」概率：连播两个小动作，更像自然行为（走动变少后略提高） */
-const IDLE_FIDGET_CHANCE = 0.36;
+/** 闲置姿态动作（低频：累了才换姿势，交给情绪权重决定） */
+const IDLE_POSE_POOL = ["stretch", "sit", "crouch", "lie", "prone", "yawn", "wave"];
+
+/**
+ * 非合成路径的单动作选择：微动作为主（~78%），姿态偶尔。
+ * @returns {string}
+ */
+function pickIdleAction() {
+  return Math.random() < 0.78
+    ? IDLE_MICRO_POOL[Math.floor(Math.random() * IDLE_MICRO_POOL.length)]
+    : IDLE_POSE_POOL[Math.floor(Math.random() * IDLE_POSE_POOL.length)];
+}
+
+/** 偶发「微序列」概率：连播小动作（走即兴合成） */
+const IDLE_FIDGET_CHANCE = 0.72;
 
 /** 兼容旧调用：行为 → 代表动作（首步） */
 function actionForScene(scene) {
@@ -108,11 +120,67 @@ function bodyUrl(key) {
  *     | Promise<null | { zoneId?: string, idleWeights?: Record<string, number>, facingHint?: "left"|"right"|null }>,
  *   getLastZoneId?: () => string|null,
  *   onZoneSit?: (zoneId: string|null) => void,
+ *   improvFidget?: (ctx: { timeBucket?: string, zoneId?: string|null, affinity?: number }) =>
+ *     | (string | { action: string, holdMs?: number|null })[] | null,
+ *   getMood?: () => import("./mood.js").MoodVec | { groupBias?: Record<string, number> } | null,
  * }} [deps]
  */
 export function createMotionController(deps = {}) {
   const getZoneSnapshot = deps.getZoneSnapshot || null;
   const getLastZoneId = deps.getLastZoneId || null;
+  /**
+   * 即兴闲置链：优先用外部注入（可带亲密度 / 时段语境），
+   * 默认退化为无语境合成。返回 null → 走旧 idleFidget 固定行为。
+   */
+  const improvFidget =
+    typeof deps.improvFidget === "function"
+      ? deps.improvFidget
+      : (ctx) => defaultImprovFidget({ ...ctx, catalog: ACTIONS });
+  /** 情绪快照（app 注入；缺席时合成器按中性情绪处理） */
+  const getMood = typeof deps.getMood === "function" ? deps.getMood : () => null;
+
+  /**
+   * 情绪驱动合成：所有已知场景不再查固定行为表，
+   * 动作链由「情绪 × 场景偏置」现场生成。
+   * @param {string} sceneId
+   * @param {{ force?: boolean, fromIdle?: boolean, holdMs?: number }} [opts]
+   * @returns {number | null} 链估计时长（ms）；null = 未合成（走兜底）
+   */
+  function trySynthBehavior(sceneId, opts = {}) {
+    try {
+      const chain = improvChain({
+        scene: sceneId,
+        timeBucket: timeBucket(),
+        zoneId: typeof getLastZoneId === "function" ? getLastZoneId() || undefined : undefined,
+        mood: getMood() || undefined,
+        catalog: ACTIONS,
+      });
+      if (!Array.isArray(chain) || !chain.length) return null;
+
+      // 睡眠语境场景进入 sleep context（动作回退到睡眠而非 idle）
+      if (sceneId === "night" || sceneId === "lateNight") setContext("sleep");
+      else if (!opts.fromIdle) setContext("");
+
+      let steps = chain;
+      // 外部 holdMs 覆盖（菜单停留更久等）：应用到末步
+      if (opts.holdMs && opts.holdMs > 0 && steps.length) {
+        steps = steps.map((s) => (typeof s === "string" ? { action: s } : { ...s }));
+        const last = steps[steps.length - 1];
+        if (last.holdMs !== null || steps.length === 1) {
+          steps[steps.length - 1] = { action: last.action, holdMs: opts.holdMs };
+        }
+      }
+
+      playChain(steps, {
+        force: opts.fromIdle ? Boolean(opts.force) : opts.force !== false,
+        fromIdle: Boolean(opts.fromIdle),
+        behaviorId: sceneId,
+      });
+      return estimateChainMs(steps, ACTIONS);
+    } catch {
+      return null; // 合成异常 → 兜底旧行为表
+    }
+  }
 
   /** @type {HTMLElement|null} */
   let root = null;
@@ -148,7 +216,118 @@ export function createMotionController(deps = {}) {
   let frameLoop = true;
   let holdLast = false;
   let frameIntervalMs = 250;
+  /** 循环播放方向（1 正放 / -1 倒放——轮间随机翻转，动作不再匀速往返） */
+  let frameDir = 1;
+  /** 每轮循环的速度抖动（0.8–1.2，呼吸/摆动的节奏每轮不同） */
+  let frameFpsJitter = 1;
   let playingToken = 0;
+
+  // —— Flow 层：连续微动画（rAF 噪声驱动，非帧模板） ——
+  // 三层不可通约频率的正弦叠加 → 永不精确重复的平滑摆动，
+  // 叠加视线跟随（她微微朝你的光标方向偏移）与拖拽惯性倾斜。
+  let flowRaf = 0;
+  let flowT = Math.random() * 100;
+  let flowAmp = 1;
+  let flowSpeed = 1;
+  /** 鼠标相对她的归一化方向（-1..1；null = 不在窗口） */
+  let flowPointerX = null;
+  let flowPointerCur = 0;
+  /** 拖拽惯性倾斜目标（-1..1，来自拖拽瞬时速度） */
+  let flowLeanTarget = 0;
+  let flowLeanCur = 0;
+
+  /** 各动作的摆动强度（睡/躺几乎静止，活跃动作摆幅大） */
+  const FLOW_ACTION_AMP = {
+    idle: 1, breathe: 0.9, sway: 1.25, look: 1, smile: 1, nod: 1,
+    calm: 0.85, soft: 0.85, think: 0.8, peek: 1, giggle: 1.15, talk: 1,
+    wave: 1.1, stretch: 1.2, hop: 1.3, bounce: 1.3, celebrate: 1.3,
+    alert: 1.1, shy: 0.75, coat: 0.9, yawn: 0.9, greet: 1.1, walk: 1,
+    sit: 0.55, crouch: 0.55, rest: 0.5, lie: 0.3, prone: 0.3,
+    sleep: 0.22, drag: 0.5,
+  };
+
+  function applyFlowTransform() {
+    if (!layerA || !layerB) return;
+    // 两个 sprite 层同步（同一时刻只有一层可见，但切换时保持连续）
+    const t =
+      "translate3d(" +
+      flowState.x.toFixed(2) +
+      "px, " +
+      flowState.y.toFixed(2) +
+      "px, 0) rotate(" +
+      flowState.rot.toFixed(3) +
+      "deg)";
+    if (layerA.style.transform !== t) layerA.style.transform = t;
+    if (layerB.style.transform !== t) layerB.style.transform = t;
+  }
+
+  const flowState = { rot: 0, x: 0, y: 0 };
+
+  function flowTick() {
+    if (!enabled) {
+      flowRaf = 0;
+      return;
+    }
+    flowT += (1 / 60) * flowSpeed;
+    const n1 =
+      Math.sin(flowT * 0.9) * 0.55 +
+      Math.sin(flowT * 1.73 + 1.3) * 0.3 +
+      Math.sin(flowT * 0.23 + 4.1) * 0.35;
+    const n2 =
+      Math.sin(flowT * 0.71 + 2.2) * 0.5 +
+      Math.sin(flowT * 1.13 + 0.7) * 0.35;
+    const n3 =
+      Math.sin(flowT * 1.07 + 5.0) * 0.6 +
+      Math.sin(flowT * 0.29 + 1.9) * 0.4;
+
+    // 视线跟随：平滑趋近鼠标方向（她"看向你"的微位移）
+    const target = flowPointerX == null ? 0 : flowPointerX;
+    flowPointerCur += (target - flowPointerCur) * 0.045;
+    // 拖拽惯性：身体朝移动方向倾斜，松手回弹
+    flowLeanCur += (flowLeanTarget - flowLeanCur) * 0.12;
+
+    flowState.rot = n1 * 0.85 * flowAmp + flowLeanCur * 3.2;
+    flowState.x = n2 * 1.5 * flowAmp + flowPointerCur * 1.8;
+    flowState.y = n3 * 1.0 * flowAmp;
+    applyFlowTransform();
+    flowRaf = requestAnimationFrame(flowTick);
+  }
+
+  function startFlow() {
+    if (!flowRaf && enabled) flowRaf = requestAnimationFrame(flowTick);
+  }
+
+  function stopFlow() {
+    if (flowRaf) {
+      cancelAnimationFrame(flowRaf);
+      flowRaf = 0;
+    }
+  }
+
+  /** 动作切换 → 摆动强度与节奏随情绪/动作变化 */
+  function updateFlowForAction(actionId) {
+    flowAmp = FLOW_ACTION_AMP[actionId] ?? 1;
+    try {
+      const m = typeof getMood === "function" ? getMood() : null;
+      const e = m && Number.isFinite(m.energy) ? m.energy : 55;
+      flowSpeed = 0.8 + (e / 100) * 0.6; // 精力充沛摆动更快，困了近乎凝滞
+    } catch {
+      flowSpeed = 1;
+    }
+  }
+
+  /** @param {number | null} nx 鼠标相对她的归一化方向（-1..1，null 离开窗口） */
+  function setFlowPointer(nx) {
+    flowPointerX =
+      typeof nx === "number" && Number.isFinite(nx)
+        ? Math.max(-1, Math.min(1, nx))
+        : null;
+  }
+
+  /** @param {number} lean 拖拽倾斜（-1..1，由瞬时拖拽速度映射） */
+  function setDragLean(lean) {
+    flowLeanTarget = Math.max(-1, Math.min(1, Number(lean) || 0));
+  }
   /** Invalidates in-flight image load handlers so stale swaps cannot double-show layers. */
   let swapToken = 0;
   /** Last applied act-* class (skip full classList scan when unchanged). */
@@ -235,6 +414,28 @@ export function createMotionController(deps = {}) {
     if (z) actor.dataset.zone = z;
   }
 
+  /**
+   * 即兴闲置链：合成成功即播放（非 force，尊重漫游 / 场景锁）。
+   * @param {string | null} zoneId
+   * @returns {boolean} 是否已用即兴链接手
+   */
+  function tryImprovFidget(zoneId) {
+    try {
+      const chain = improvFidget({
+        timeBucket: timeBucket(),
+        zoneId,
+        mood: getMood() || undefined,
+      });
+      if (Array.isArray(chain) && chain.length) {
+        playChain(chain, { fromIdle: true, force: false, behaviorId: "improvFidget" });
+        return true;
+      }
+    } catch {
+      /* 即兴失败就走固定行为池 */
+    }
+    return false;
+  }
+
   async function tickIdle() {
     if (!enabled || paused || Date.now() < lockedUntil) {
       scheduleIdle();
@@ -282,20 +483,24 @@ export function createMotionController(deps = {}) {
     }
 
     if (!pick || pick === "idle") {
-      pick = IDLE_POOL[Math.floor(Math.random() * IDLE_POOL.length)];
+      pick = pickIdleAction();
     }
 
     stampZoneDom(zoneIdForDom);
 
-    // Occasional multi-action fidget sequence (smoother "living" idle)
+    // Occasional multi-action fidget sequence (smoother "living" idle).
+    // 优先即兴合成链（每次组合都不一样）；合成器放弃时走固定行为池。
     if (
       !zoneIdForDom &&
       Date.now() >= postSceneUntil &&
-      Math.random() < IDLE_FIDGET_CHANCE &&
-      getBehavior("idleFidget")
+      Math.random() < IDLE_FIDGET_CHANCE
     ) {
-      playBehavior("idleFidget", { fromIdle: true, force: false });
-      return;
+      const improvised = tryImprovFidget(null);
+      if (improvised) return;
+      if (getBehavior("idleFidget")) {
+        playBehavior("idleFidget", { fromIdle: true, force: false });
+        return;
+      }
     }
     // Zone path: still sometimes use coordinated micro-chains
     if (
@@ -303,6 +508,8 @@ export function createMotionController(deps = {}) {
       Date.now() >= postSceneUntil &&
       Math.random() < IDLE_FIDGET_CHANCE * 0.65
     ) {
+      const improvised = tryImprovFidget(zoneIdForDom);
+      if (improvised) return;
       playBehavior("idleFidget", { fromIdle: true, force: false });
       return;
     }
@@ -326,8 +533,18 @@ export function createMotionController(deps = {}) {
   function scheduleIdle() {
     clearIdleTimer();
     if (!enabled) return;
-    // Lively in-place fidgets (look / sway / breathe…) — not screen walks
-    const wait = 3200 + Math.random() * 5200;
+    // VPet 式节奏：小动作频繁发生（1.1–3.7s 一次），不再一张图停半分钟。
+    // 困倦 / 深夜时动作自然放缓——「累了动作变慢」而不是匀速播放。
+    let wait = 1100 + Math.random() * 2600;
+    try {
+      const mood = typeof getMood === "function" ? getMood() : null;
+      if (mood && Number.isFinite(mood.energy) && mood.energy < 30) wait *= 1.7;
+    } catch {
+      /* 情绪缺席就按常速 */
+    }
+    const bucket = timeBucket();
+    if (bucket === "lateNight") wait *= 1.45;
+    else if (bucket === "night" || bucket === "dawn") wait *= 1.2;
     idleTimer = setTimeout(() => {
       void tickIdle();
     }, wait);
@@ -349,6 +566,8 @@ export function createMotionController(deps = {}) {
     }
     actor.dataset.action = actionId;
     applyFacingClass();
+    // Flow 层随动作调整摆幅（睡几乎静止、活跃动作摆幅大）与节奏（情绪 energy）
+    updateFlowForAction(actionId);
   }
 
   function applyFacingClass() {
@@ -405,6 +624,8 @@ export function createMotionController(deps = {}) {
       if (token !== swapToken || !layerA || !layerB) return;
       // Hard cut: hide current first, then show prepared layer.
       // Never leave two pink-outlined sprites composited together.
+      // 注意：这里必须保持瞬时硬切——任何渐入/交叉淡化都会让半透明
+      // 粉边透出桌面背景，动作高频切换时表现为晃眼的闪烁（实测教训）。
       front.classList.remove("is-visible");
       back.classList.add("is-visible");
       frontIsA = !frontIsA;
@@ -438,21 +659,29 @@ export function createMotionController(deps = {}) {
 
     showFrame(frameList[frameIndex]);
 
-    const last = frameIndex >= frameList.length - 1;
-    if (last) {
-      if (frameLoop) {
-        frameIndex = 0;
-      } else if (holdLast) {
-        // freeze on last frame until action timer ends
-        return;
-      } else {
-        // one-shot finished frames — wait for duration timer to reset action
-        return;
+    const atEnd = frameIndex >= frameList.length - 1;
+    const atStart = frameIndex <= 0;
+
+    if (frameLoop) {
+      // 循环动作到达边界 → 抽下一轮变体（35% 反向走、速度 ±20% 抖动），
+      // 呼吸 / 摆动不再匀速重复，每一轮的节奏都略有不同。
+      if ((frameDir > 0 && atEnd) || (frameDir < 0 && atStart)) {
+        if (Math.random() < 0.35) frameDir = -frameDir;
+        frameFpsJitter = 0.8 + Math.random() * 0.4;
       }
-    } else {
-      frameIndex += 1;
+      frameIndex += frameDir;
+      if (frameIndex < 0) frameIndex = 0;
+      if (frameIndex > frameList.length - 1) frameIndex = frameList.length - 1;
+      frameTimer = setTimeout(() => tickFrames(token), frameIntervalMs / frameFpsJitter);
+      return;
     }
 
+    // one-shot：播完即停（等 duration 定时器回 idle / 链推进）
+    if (atEnd) {
+      if (!holdLast) return;
+      return;
+    }
+    frameIndex += 1;
     frameTimer = setTimeout(() => tickFrames(token), frameIntervalMs);
   }
 
@@ -467,8 +696,12 @@ export function createMotionController(deps = {}) {
     frameLoop = Boolean(def.loop);
     holdLast = Boolean(def.holdLast);
     frameIndex = 0;
+    frameDir = 1;
+    frameFpsJitter = 1;
     const fps = Math.max(0.5, Number(def.fps) || 4);
-    frameIntervalMs = Math.round(1000 / fps);
+    // 每次开播 fps 微抖 ±12%——同一段动作每次播的密度都略有不同
+    const jitteredFps = fps * (0.88 + Math.random() * 0.24);
+    frameIntervalMs = Math.round(1000 / jitteredFps);
 
     // paint first frame immediately
     showFrame(frameList[0]);
@@ -478,7 +711,7 @@ export function createMotionController(deps = {}) {
     }
 
     frameTimer = setTimeout(() => {
-      frameIndex = 1 % frameList.length;
+      frameIndex = Math.min(1, frameList.length - 1);
       tickFrames(token);
     }, frameIntervalMs);
   }
@@ -664,10 +897,17 @@ export function createMotionController(deps = {}) {
 
   /**
    * Resolve a named behavior (weighted multi-variant chains) and play it.
+   * 主路径：情绪驱动现场合成；仅合成不可用时兜底固定行为表。
    * @param {string} behaviorId
    * @param {{ force?: boolean, fromIdle?: boolean, holdMs?: number }} [opts]
    */
   function playBehavior(behaviorId, opts = {}) {
+    // 只有明确收录的场景走情绪合成；未知 id（可能是动作名如 wave）直接播
+    if (Object.prototype.hasOwnProperty.call(SCENE_BIAS, behaviorId)) {
+      const synthMs = trySynthBehavior(behaviorId, opts);
+      if (synthMs != null) return synthMs;
+    }
+
     const def = getBehavior(behaviorId);
     if (!def) {
       play(behaviorId, { force: Boolean(opts.force), fromIdle: Boolean(opts.fromIdle) });
@@ -765,10 +1005,12 @@ export function createMotionController(deps = {}) {
     paused = false;
     startFramePlayback(def);
     scheduleIdle();
+    startFlow();
   }
 
   function detach() {
     enabled = false;
+    stopFlow();
     clearActionTimer();
     clearIdleTimer();
     clearFrameTimer();
@@ -797,6 +1039,24 @@ export function createMotionController(deps = {}) {
   }
 
   function playScene(scene, extra = {}) {
+    // 主路径：情绪驱动现场合成（含时段 / 互动 / 反应全部已知场景）
+    if (Object.prototype.hasOwnProperty.call(SCENE_BIAS, scene)) {
+      const synthMs = trySynthBehavior(scene, {
+        force: true,
+        fromIdle: false,
+        ...extra,
+      });
+      if (synthMs != null) {
+        const holdMs =
+          extra.holdMs && extra.holdMs > 0
+            ? Number(extra.holdMs)
+            : Math.max(1200, Number(synthMs) || 1200);
+        postSceneUntil = Date.now() + holdMs + ZONE_CONFIG.POST_SCENE_IDLE_COOLDOWN_MS;
+        return;
+      }
+    }
+
+    // 兜底：旧行为表 / 直接动作
     const behavior = getBehavior(scene);
     if (behavior) {
       const chainMs = playBehavior(scene, {
@@ -841,6 +1101,8 @@ export function createMotionController(deps = {}) {
     setContext,
     setPaused,
     setFacing,
+    setFlowPointer,
+    setDragLean,
     getFacing,
     getAction,
     getBehaviorId,
