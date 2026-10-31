@@ -76,6 +76,7 @@ export const MOOD_PULSES = {
   chatterClingy: { joy: 6, shyness: 4 },
   chatterTinyAction: { energy: 5 },
   chatterSelfPlay: { calm: 3, missing: 2 },
+  chatterDomestic: { calm: 2, joy: 1 },
   chatterLlm: { joy: 2 },
 };
 
