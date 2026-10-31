@@ -45,8 +45,10 @@ const WINDOW_MODES = {
   speak: { width: 196, height: 272 },
   // Body + vertical side dock (8 action buttons)
   dock: { width: 204, height: 312 },
-  // Side dock + secondary stats submenu (affinity / counts / facts)
-  dockStats: { width: 360, height: 312 },
+  // Side dock + secondary stats submenu (affinity / counts / facts).
+  // Height must fit the full submenu (~378px incl. dock padding); too short and
+  // the top of the panel (title + affinity card) gets clipped by .shell overflow.
+  dockStats: { width: 360, height: 400 },
   // Companion chat: bubble + scrollback + input row (feet lifted for input)
   chat: { width: 420, height: 440 },
 };

@@ -483,6 +483,10 @@
   backdrop-filter: blur(14px);
   z-index: 4;
   flex-shrink: 0;
+  /* Never grow taller than the OS window — .shell clips the overflow and the
+     top of the stats panel would silently disappear above the viewport. */
+  max-height: 100%;
+  min-height: 0;
   pointer-events: auto;
   -webkit-app-region: no-drag;
   animation: dock-in-right 0.2s cubic-bezier(0.18, 0.89, 0.32, 1.15);
@@ -507,8 +511,11 @@
   animation: dock-sub-in 0.16s ease;
   transform-origin: center center;
   align-self: flex-end;
-  max-height: 100%;
+  /* Cap against the viewport (not the parent) so a short window scrolls the
+     panel internally instead of pushing its header above the top edge. */
+  max-height: calc(100vh - 24px);
   overflow-y: auto;
+  overscroll-behavior: contain;
   scrollbar-width: thin;
 }
 

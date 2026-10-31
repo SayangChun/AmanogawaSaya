@@ -440,9 +440,10 @@ function scheduleRefreshMouseIgnore(clientX, clientY) {
 
 /**
  * Prefer the side with enough room for the vertical dock (and stats if open).
+ * @param {number} [needOverride] px of room required on the chosen side
  * @returns {Promise<"left" | "right">}
  */
-async function chooseDockPlacement() {
+async function chooseDockPlacement(needOverride) {
   try {
     const [bounds, work] = await Promise.all([
       window.petApi?.bounds?.() ?? Promise.resolve(null),
@@ -450,7 +451,12 @@ async function chooseDockPlacement() {
     ]);
     if (!bounds || !work) return "right";
 
-    const need = dockStatsOpen ? 230 : 80;
+    const need =
+      typeof needOverride === "number" && Number.isFinite(needOverride)
+        ? needOverride
+        : dockStatsOpen
+          ? 230
+          : 80;
     const spaceRight = work.x + work.width - (bounds.x + bounds.width);
     const spaceLeft = bounds.x - work.x;
 
@@ -1203,6 +1209,13 @@ async function toggleDockStats(show = !dockStatsOpen) {
   const feetY = await measurePetFeetScreenY();
   const bodyX = await measurePetBodyScreenCenterX();
   const prevFeet = measureFeetFromBottomClient();
+
+  // 星轨面板比快捷栏宽得多：打开前重新评估左右侧，避免窗口被屏幕边缘
+  // 挤压后角色跟着跳位（右侧放不下就翻到左边，角色原地不动）。
+  if (willShow) {
+    dockPlacement = await chooseDockPlacement(230);
+    applyDockPlacementClass();
+  }
   dockStatsOpen = willShow;
 
   /** @type {{ prevFeetFromBottom?: number, feetFromBottom?: number }} */
@@ -1229,8 +1242,11 @@ function updateDockStatsPanel() {
   const panel = dom.dockStats || document.querySelector("#dock-stats");
   const toggleBtn = dom.dockStatsToggle || document.querySelector("#dock-stats-toggle");
   if (panel) {
+    const wasOpen = !panel.classList.contains("closed");
     panel.classList.toggle("closed", !dockStatsOpen);
     panel.setAttribute("aria-hidden", dockStatsOpen ? "false" : "true");
+    // 每次展开都从顶部开始，避免上次滚动位置把「星轨信息」标题留在视口外
+    if (dockStatsOpen && !wasOpen) panel.scrollTop = 0;
   }
   if (toggleBtn) {
     toggleBtn.classList.toggle("is-on", dockStatsOpen);
